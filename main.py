@@ -179,7 +179,7 @@ class ParkingApp:
 
         try:
             # Load mô hình YOLO 
-            model = YOLO('yolov8m.pt') 
+            model = YOLO('yolov8n.pt')
         except Exception as e:
             messagebox.showerror("Lỗi YOLO Model", f"Gặp sự cố khi khởi tạo model: {e}")
             return
@@ -250,7 +250,7 @@ class ParkingApp:
             elapsed = int((time.time() - start_time_proc) * 1000)
             wait_time = max(1, delay - elapsed)
             
-            # Điều khiển tốc độ chạy video tương ứng với FPS thực (normal speed)
+            # Điều khiển tốc độ chạy video tương ứng với FPS thực (normal speed) tại không muốn delay
             if cv2.waitKey(wait_time) & 0xFF == ord('q'):
                 break
                 
