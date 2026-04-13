@@ -9861,6 +9861,7 @@ imported by:
     <a href="#dateutil.tz.tz">dateutil.tz.tz</a>
  &#8226;   <a href="#idna.core">idna.core</a>
  &#8226;   <a href="#idna.intranges">idna.intranges</a>
+ &#8226;   <a href="#lap.lapmod">lap.lapmod</a>
  &#8226;   <a href="#mpmath.calculus.odes">mpmath.calculus.odes</a>
  &#8226;   <a href="#mpmath.libmp.libelefun">mpmath.libmp.libelefun</a>
  &#8226;   <a href="#mpmath.libmp.libintmath">mpmath.libmp.libintmath</a>
@@ -26306,10 +26307,53 @@ imported by:
 
 <div class="node">
   <a name="lap"></a>
-  <a target="code" href="" type="text/plain"><tt>lap</tt></a>
-<span class="moduletype">MissingModule</span>  <div class="import">
+  <a target="code" href="///C:/Users/ADMIN/AppData/Local/Programs/Python/Python313/Lib/site-packages/lap/__init__.py" type="text/plain"><tt>lap</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#lap._lapjv">lap._lapjv</a>
+ &#8226;   <a href="#lap.lapmod">lap.lapmod</a>
+
+  </div>
+  <div class="import">
 imported by:
-    <a href="#ultralytics.trackers.utils.matching">ultralytics.trackers.utils.matching</a>
+    <a href="#lap._lapjv">lap._lapjv</a>
+ &#8226;   <a href="#lap.lapmod">lap.lapmod</a>
+ &#8226;   <a href="#ultralytics.trackers.utils.matching">ultralytics.trackers.utils.matching</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="lap._lapjv"></a>
+  <tt>lap._lapjv</tt> <span class="moduletype"><tt>C:\Users\ADMIN\AppData\Local\Programs\Python\Python313\Lib\site-packages\lap\_lapjv.cp313-win_amd64.pyd</tt></span>  <div class="import">
+imports:
+    <a href="#lap">lap</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#lap">lap</a>
+ &#8226;   <a href="#lap.lapmod">lap.lapmod</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="lap.lapmod"></a>
+  <a target="code" href="///C:/Users/ADMIN/AppData/Local/Programs/Python/Python313/Lib/site-packages/lap/lapmod.py" type="text/plain"><tt>lap.lapmod</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#bisect">bisect</a>
+ &#8226;   <a href="#lap">lap</a>
+ &#8226;   <a href="#lap._lapjv">lap._lapjv</a>
+ &#8226;   <a href="#numpy">numpy</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#lap">lap</a>
 
   </div>
 
@@ -40227,6 +40271,7 @@ imported by:
  &#8226;   <a href="#h5py._hl.selections2">h5py._hl.selections2</a>
  &#8226;   <a href="#h5py._hl.vds">h5py._hl.vds</a>
  &#8226;   <a href="#h5py.version">h5py.version</a>
+ &#8226;   <a href="#lap.lapmod">lap.lapmod</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#matplotlib._cm">matplotlib._cm</a>
  &#8226;   <a href="#matplotlib._constrained_layout">matplotlib._constrained_layout</a>
@@ -176947,7 +176992,9 @@ imports:
  &#8226;   <a href="#torchaudio.kaldi_io">torchaudio.kaldi_io</a>
  &#8226;   <a href="#torchaudio.lib">torchaudio.lib</a>
  &#8226;   <a href="#torchaudio.lib._torchaudio">torchaudio.lib._torchaudio</a>
+ &#8226;   <a href="#torchaudio.lib.libctc_prefix_decoder">torchaudio.lib.libctc_prefix_decoder</a>
  &#8226;   <a href="#torchaudio.lib.libtorchaudio">torchaudio.lib.libtorchaudio</a>
+ &#8226;   <a href="#torchaudio.lib.pybind11_prefixctc">torchaudio.lib.pybind11_prefixctc</a>
  &#8226;   <a href="#torchaudio.models">torchaudio.models</a>
  &#8226;   <a href="#torchaudio.pipelines">torchaudio.pipelines</a>
  &#8226;   <a href="#torchaudio.sox_effects">torchaudio.sox_effects</a>
@@ -178318,7 +178365,9 @@ imports:
 imported by:
     <a href="#torchaudio">torchaudio</a>
  &#8226;   <a href="#torchaudio.lib._torchaudio">torchaudio.lib._torchaudio</a>
+ &#8226;   <a href="#torchaudio.lib.libctc_prefix_decoder">torchaudio.lib.libctc_prefix_decoder</a>
  &#8226;   <a href="#torchaudio.lib.libtorchaudio">torchaudio.lib.libtorchaudio</a>
+ &#8226;   <a href="#torchaudio.lib.pybind11_prefixctc">torchaudio.lib.pybind11_prefixctc</a>
 
   </div>
 
@@ -178342,8 +178391,38 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="torchaudio.lib.libctc_prefix_decoder"></a>
+  <tt>torchaudio.lib.libctc_prefix_decoder</tt> <span class="moduletype"><tt>C:\Users\ADMIN\AppData\Local\Programs\Python\Python313\Lib\site-packages\torchaudio\lib\libctc_prefix_decoder.pyd</tt></span>  <div class="import">
+imports:
+    <a href="#torchaudio.lib">torchaudio.lib</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#torchaudio">torchaudio</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="torchaudio.lib.libtorchaudio"></a>
   <tt>torchaudio.lib.libtorchaudio</tt> <span class="moduletype"><tt>C:\Users\ADMIN\AppData\Local\Programs\Python\Python313\Lib\site-packages\torchaudio\lib\libtorchaudio.pyd</tt></span>  <div class="import">
+imports:
+    <a href="#torchaudio.lib">torchaudio.lib</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#torchaudio">torchaudio</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="torchaudio.lib.pybind11_prefixctc"></a>
+  <tt>torchaudio.lib.pybind11_prefixctc</tt> <span class="moduletype"><tt>C:\Users\ADMIN\AppData\Local\Programs\Python\Python313\Lib\site-packages\torchaudio\lib\pybind11_prefixctc.pyd</tt></span>  <div class="import">
 imports:
     <a href="#torchaudio.lib">torchaudio.lib</a>
 

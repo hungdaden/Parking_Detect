@@ -9,13 +9,14 @@ class ParkingApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Ứng dụng Nhận diện Bãi đỗ xe")
-        self.root.geometry("650x450")
+        self.root.geometry("750x480")
         
         # status agru
         self.video_path = tk.StringVar()
         self.start_time = tk.DoubleVar(value=0.0)
         self.end_time = tk.DoubleVar(value=0.0)
         self.full_video = tk.BooleanVar(value=True)
+        self.is_webcam = tk.BooleanVar(value=False)
         
         self.polygons = [] # ve
         self.current_polygon = [] # dang ve do
@@ -53,10 +54,13 @@ class ParkingApp:
         
         # Các nút chức năng chính
         frame_actions = tk.Frame(self.root)
-        frame_actions.pack(pady=20)
+        frame_actions.pack(pady=30)
+        tk.Button(frame_actions, text="Khoanh Vùng Đỗ Xe", width=20, height=2, bg="#3498db", fg="white", font=("Arial", 11, "bold"), command=self.draw_regions).grid(row=0, column=0, padx=10)
         
-        tk.Button(frame_actions, text="1. Khoanh Vùng Đỗ Xe", width=25, height=2, bg="#3498db", fg="white", font=("Arial", 11, "bold"), command=self.draw_regions).grid(row=0, column=0, padx=15)
-        tk.Button(frame_actions, text="2. Bắt Đầu Nhận Diện", width=25, height=2, bg="#e74c3c", fg="white", font=("Arial", 11, "bold"), command=self.run_detection).grid(row=0, column=1, padx=15)
+        tk.Button(frame_actions, text="Bắt Đầu Nhận Diện", width=20, height=2, bg="#e74c3c", fg="white", font=("Arial", 11, "bold"), command=self.run_detection).grid(row=0, column=1, padx=10)
+        
+        self.btn_webcam = tk.Button(frame_actions, text="Sử Dụng Webcam", width=20, height=2, bg="#f39c12", fg="white", font=("Arial", 11, "bold"), command=self.toggle_webcam_button)
+        self.btn_webcam.grid(row=0, column=2, padx=10)
         
         # Hướng dẫn
         lbl_info = tk.Label(self.root, text="Hướng dẫn vẽ: Click Chuột Trái để chọn điểm, Chuột Phải để khép kín ô.\nNhấn phím Z (hoặc Backspace) để hoàn tác nét vẽ lỗi. Nhấn C để xóa toàn bộ.\nKhi vẽ xong toàn bộ các bãi đỗ, bấm phím SPACE (khoảng trắng) để lưu lại.", fg="#7f8c8d", justify="center")
@@ -70,8 +74,28 @@ class ParkingApp:
             self.start_time.set(0.0)
             self.end_time.set(0.0)
             self.full_video.set(True)
+            self.is_webcam.set(False)
+            try:
+                self.btn_webcam.config(bg="#f39c12", text="Sử Dụng Webcam")
+            except:
+                pass
             self.toggle_entries()
             self.polygons = [] # Reset vùng vẽ
+
+    def toggle_webcam_button(self):
+        new_state = not self.is_webcam.get()
+        self.is_webcam.set(new_state)
+        if new_state:
+            self.video_path.set("0 (Webcam)")
+            self.full_video.set(True)
+            self.chk_full.config(state='disabled')
+            self.toggle_entries()
+            self.polygons = []
+            self.btn_webcam.config(bg="#27ae60", text="Đang Mở Webcam")
+        else:
+            self.video_path.set("")
+            self.chk_full.config(state='normal')
+            self.btn_webcam.config(bg="#f39c12", text="Sử Dụng Webcam")
             
     def toggle_entries(self):
         if self.full_video.get():
@@ -108,16 +132,19 @@ class ParkingApp:
 
     def draw_regions(self):
         if not self.video_path.get():
-            messagebox.showerror("Lỗi", "Vui lòng chọn video trước bằng nút Duyệt File!")
+            messagebox.showerror("Lỗi", "Vui lòng chọn video trước bằng nút Duyệt File hoặc chọn Webcam!")
             return
 
-        cap = cv2.VideoCapture(self.video_path.get())
+        src = 0 if self.is_webcam.get() else self.video_path.get()
+        cap = cv2.VideoCapture(src)
         if not cap.isOpened():
             messagebox.showerror("Lỗi", "Không thể mở video!")
             return
 
-        start_sec, _ = self.get_start_end(cap)
-        cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
+        if src != 0:
+            start_sec, _ = self.get_start_end(cap)
+            cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
+            
         ret, frame = cap.read()
         if not ret:
             messagebox.showerror("Lỗi", "Không thể đọc khung hình từ video tại mốc thời gian bắt đầu. Thử chọn thời điểm khác.")
@@ -184,18 +211,23 @@ class ParkingApp:
             messagebox.showerror("Lỗi YOLO Model", f"Gặp sự cố khi khởi tạo model: {e}")
             return
         
-        cap = cv2.VideoCapture(self.video_path.get())
-        start_sec, end_sec = self.get_start_end(cap)
+        src = 0 if self.is_webcam.get() else self.video_path.get()
+        cap = cv2.VideoCapture(src)
+        
+        if src != 0:
+            start_sec, end_sec = self.get_start_end(cap)
+            cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
+        else:
+            start_sec, end_sec = 0.0, float('inf')
         
         fps = cap.get(cv2.CAP_PROP_FPS)
         delay = int(1000 / fps) if fps > 0 else 30
         
-        cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
-        
         while cap.isOpened():
-            current_msec = cap.get(cv2.CAP_PROP_POS_MSEC)
-            if current_msec > end_sec * 1000:
-                break
+            if src != 0:
+                current_msec = cap.get(cv2.CAP_PROP_POS_MSEC)
+                if current_msec > end_sec * 1000:
+                    break
                 
             start_time_proc = time.time()
             
