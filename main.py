@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import threading
 from ultralytics import YOLO
 import time
 
@@ -17,6 +18,9 @@ class ParkingApp:
         self.end_time = tk.DoubleVar(value=0.0)
         self.full_video = tk.BooleanVar(value=True)
         self.is_webcam = tk.BooleanVar(value=False)
+        self.webcam_index = 0
+        self.detection_active = False
+        self.last_poly_status = []  # True = occupied, False = empty
         
         self.polygons = [] # ve
         self.current_polygon = [] # dang ve do
@@ -25,9 +29,17 @@ class ParkingApp:
         self.setup_ui()
         
     def setup_ui(self):
+        # Frame trên cùng chứa tiêu đề + nút Check In
+        frame_top = tk.Frame(self.root)
+        frame_top.pack(fill='x', padx=20, pady=(15, 5))
+        
         # Tiêu đề đây
-        lbl_title = tk.Label(self.root, text="HỆ THỐNG NHẬN DIỆN BÃI ĐỖ XE", font=("Arial", 16, "bold"), fg="#2c3e50")
-        lbl_title.pack(pady=20)
+        lbl_title = tk.Label(frame_top, text="HỆ THỐNG NHẬN DIỆN BÃI ĐỖ XE", font=("Arial", 16, "bold"), fg="#2c3e50")
+        lbl_title.pack(side='left', expand=True)
+        
+        # Nút Check In góc trên phải
+        self.btn_checkin = tk.Button(frame_top, text="Check In", width=10, bg="#95a5a6", fg="white", font=("Arial", 9, "bold"), state='disabled', command=self.show_checkin_popup)
+        self.btn_checkin.pack(side='right')
         
         # Frame chọn file
         frame_file = tk.Frame(self.root)
@@ -55,12 +67,13 @@ class ParkingApp:
         # Các nút chức năng chính
         frame_actions = tk.Frame(self.root)
         frame_actions.pack(pady=30)
-        tk.Button(frame_actions, text="Khoanh Vùng Đỗ Xe", width=20, height=2, bg="#3498db", fg="white", font=("Arial", 11, "bold"), command=self.draw_regions).grid(row=0, column=0, padx=10)
-        
-        tk.Button(frame_actions, text="Bắt Đầu Nhận Diện", width=20, height=2, bg="#e74c3c", fg="white", font=("Arial", 11, "bold"), command=self.run_detection).grid(row=0, column=1, padx=10)
         
         self.btn_webcam = tk.Button(frame_actions, text="Sử Dụng Webcam", width=20, height=2, bg="#f39c12", fg="white", font=("Arial", 11, "bold"), command=self.toggle_webcam_button)
         self.btn_webcam.grid(row=0, column=2, padx=10)
+        
+        tk.Button(frame_actions, text="Khoanh Vùng Đỗ Xe", width=20, height=2, bg="#3498db", fg="white", font=("Arial", 11, "bold"), command=self.draw_regions).grid(row=0, column=0, padx=10)
+        
+        tk.Button(frame_actions, text="Bắt Đầu Nhận Diện", width=20, height=2, bg="#e74c3c", fg="white", font=("Arial", 11, "bold"), command=self.run_detection).grid(row=0, column=1, padx=10)
         
         # Hướng dẫn
         lbl_info = tk.Label(self.root, text="Hướng dẫn vẽ: Click Chuột Trái để chọn điểm, Chuột Phải để khép kín ô.\nNhấn phím Z (hoặc Backspace) để hoàn tác nét vẽ lỗi. Nhấn C để xóa toàn bộ.\nKhi vẽ xong toàn bộ các bãi đỗ, bấm phím SPACE (khoảng trắng) để lưu lại.", fg="#7f8c8d", justify="center")
@@ -82,16 +95,64 @@ class ParkingApp:
             self.toggle_entries()
             self.polygons = [] # Reset vùng vẽ
 
-    def toggle_webcam_button(self):
-        new_state = not self.is_webcam.get()
-        self.is_webcam.set(new_state)
-        if new_state:
-            self.video_path.set("0 (Webcam)")
+    def choose_webcam(self):
+        top = tk.Toplevel(self.root)
+        top.title("Chọn Camera")
+        top.geometry("300x200")
+        top.transient(self.root)
+        top.grab_set()
+
+        lbl_status = tk.Label(top, text="Đang tìm các camera khả dụng...")
+        lbl_status.pack(pady=10)
+        top.update()
+
+        available_cameras = []
+        for i in range(5):
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            if cap.isOpened():
+                available_cameras.append(i)
+                cap.release()
+                
+        for widget in top.winfo_children():
+            widget.destroy()
+            
+        def on_close():
+            self.is_webcam.set(False)
+            self.video_path.set("")
+            self.chk_full.config(state='normal')
+            self.btn_webcam.config(bg="#f39c12", text="Sử Dụng Webcam")
+            top.destroy()
+            
+        if not available_cameras:
+            tk.Label(top, text="Không tìm thấy Camera nào!").pack(pady=20)
+            tk.Button(top, text="Đóng", command=on_close).pack()
+            top.protocol("WM_DELETE_WINDOW", on_close)
+            return
+
+        tk.Label(top, text="Vui lòng chọn Camera:").pack(pady=10)
+        
+        selected_cam = tk.IntVar(value=available_cameras[0])
+        for cam in available_cameras:
+            tk.Radiobutton(top, text=f"Camera {cam}", variable=selected_cam, value=cam).pack(anchor='w', padx=100)
+            
+        def on_select():
+            self.webcam_index = selected_cam.get()
+            self.video_path.set(f"Camera {self.webcam_index} (Webcam)")
             self.full_video.set(True)
             self.chk_full.config(state='disabled')
             self.toggle_entries()
             self.polygons = []
-            self.btn_webcam.config(bg="#27ae60", text="Đang Mở Webcam")
+            self.btn_webcam.config(bg="#27ae60", text=f"Đang Mở Cam {self.webcam_index}")
+            top.destroy()
+            
+        tk.Button(top, text="Xác nhận", command=on_select, bg="#3498db", fg="white").pack(pady=15)
+        top.protocol("WM_DELETE_WINDOW", on_close)
+
+    def toggle_webcam_button(self):
+        new_state = not self.is_webcam.get()
+        self.is_webcam.set(new_state)
+        if new_state:
+            self.choose_webcam()
         else:
             self.video_path.set("")
             self.chk_full.config(state='normal')
@@ -135,13 +196,13 @@ class ParkingApp:
             messagebox.showerror("Lỗi", "Vui lòng chọn video trước bằng nút Duyệt File hoặc chọn Webcam!")
             return
 
-        src = 0 if self.is_webcam.get() else self.video_path.get()
+        src = self.webcam_index if self.is_webcam.get() else self.video_path.get()
         cap = cv2.VideoCapture(src)
         if not cap.isOpened():
-            messagebox.showerror("Lỗi", "Không thể mở video!")
+            messagebox.showerror("Lỗi", "Không thể mở video hoặc Webcam!")
             return
 
-        if src != 0:
+        if not self.is_webcam.get():
             start_sec, _ = self.get_start_end(cap)
             cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
             
@@ -194,6 +255,92 @@ class ParkingApp:
         cv2.destroyWindow('Draw Parking Regions')
         cap.release()
 
+    def show_checkin_popup(self):
+        if not self.detection_active or not self.is_webcam.get():
+            messagebox.showinfo("Check In", "Chức năng Check In chỉ hoạt động khi đang nhận diện bằng Webcam.")
+            return
+        
+        status = self.last_poly_status
+        if not status:
+            messagebox.showinfo("Check In", "Chưa có dữ liệu nhận diện. Vui lòng đợi...")
+            return
+        
+        top = tk.Toplevel(self.root)
+        top.title("Check In - Tình trạng Bãi đỗ")
+        top.geometry("420x500")
+        top.transient(self.root)
+        top.configure(bg="#ecf0f1")
+        
+        # Header
+        tk.Label(top, text="TÌNH TRẠNG BÃI ĐỖ XE", font=("Arial", 14, "bold"), fg="#2c3e50", bg="#ecf0f1").pack(pady=(15, 5))
+        
+        empty_slots = [i + 1 for i, occupied in enumerate(status) if not occupied]
+        occupied_slots = [i + 1 for i, occupied in enumerate(status) if occupied]
+        total = len(status)
+        
+        summary_text = f"Trống: {len(empty_slots)}/{total}   |   Đã đỗ: {len(occupied_slots)}/{total}"
+        tk.Label(top, text=summary_text, font=("Arial", 11), fg="#34495e", bg="#ecf0f1").pack(pady=5)
+        
+        frame_list = tk.Frame(top, bg="#ecf0f1")
+        frame_list.pack(fill='both', expand=True, padx=20, pady=10)
+        
+        canvas = tk.Canvas(frame_list, bg="#ecf0f1", highlightthickness=0)
+        scrollbar = tk.Scrollbar(frame_list, orient='vertical', command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg="#ecf0f1")
+        
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+        
+        for idx in range(total):
+            slot_num = idx + 1
+            is_occ = status[idx]
+            
+            row_frame = tk.Frame(scroll_frame, bg="white", bd=1, relief='groove')
+            row_frame.pack(fill='x', pady=2, padx=5)
+            
+            if is_occ:
+                icon = "🔴"
+                text = f"  Ô {slot_num}:  Đã có xe"
+                color = "#e74c3c"
+            else:
+                icon = "🟢"
+                text = f"  Ô {slot_num}:  Còn trống"
+                color = "#27ae60"
+            
+            tk.Label(row_frame, text=icon, font=("Arial", 12), bg="white").pack(side='left', padx=(10, 0))
+            tk.Label(row_frame, text=text, font=("Arial", 11, "bold"), fg=color, bg="white", anchor='w').pack(side='left', fill='x', expand=True, pady=8)
+        
+        # Thông báo hướng dẫn
+        msg_frame = tk.Frame(top, bg="#ecf0f1")
+        msg_frame.pack(fill='x', padx=20, pady=(0, 15))
+        
+        if empty_slots:
+            guide_text = f"✅ Vui lòng tiến vào Ô {empty_slots[0]} để đỗ xe."
+            if len(empty_slots) > 1:
+                other = ", ".join(str(s) for s in empty_slots[1:])
+                guide_text += f"\nCác ô trống khác: {other}"
+            guide_color = "#27ae60"
+        else:
+            guide_text = "⛔ Bãi đỗ đã đầy. Vui lòng quay lại sau."
+            guide_color = "#e74c3c"
+        
+        tk.Label(msg_frame, text=guide_text, font=("Arial", 11, "bold"), fg=guide_color, bg="#ecf0f1", justify='center', wraplength=380).pack(pady=5)
+        
+        def close_and_refocus():
+            top.destroy()
+            try:
+                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 1)
+                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 0)
+            except:
+                pass
+        
+        tk.Button(top, text="Đóng", command=close_and_refocus, bg="#3498db", fg="white", font=("Arial", 10, "bold"), width=12).pack(pady=(0, 15))
+        top.protocol("WM_DELETE_WINDOW", close_and_refocus)
+
     def run_detection(self):
         if not self.video_path.get():
             messagebox.showerror("Lỗi", "Vui lòng chọn video trước!")
@@ -211,10 +358,10 @@ class ParkingApp:
             messagebox.showerror("Lỗi YOLO Model", f"Gặp sự cố khi khởi tạo model: {e}")
             return
         
-        src = 0 if self.is_webcam.get() else self.video_path.get()
+        src = self.webcam_index if self.is_webcam.get() else self.video_path.get()
         cap = cv2.VideoCapture(src)
         
-        if src != 0:
+        if not self.is_webcam.get():
             start_sec, end_sec = self.get_start_end(cap)
             cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
         else:
@@ -223,8 +370,16 @@ class ParkingApp:
         fps = cap.get(cv2.CAP_PROP_FPS)
         delay = int(1000 / fps) if fps > 0 else 30
         
+        # Kích hoạt trạng thái detection và nút Check In (chỉ webcam)
+        self.detection_active = True
+        if self.is_webcam.get():
+            self.btn_checkin.config(state='normal', bg="#27ae60")
+            # Fullscreen cho webcam
+            cv2.namedWindow("Video Detection", cv2.WND_PROP_FULLSCREEN)
+            cv2.setWindowProperty("Video Detection", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        
         while cap.isOpened():
-            if src != 0:
+            if not self.is_webcam.get():
                 current_msec = cap.get(cv2.CAP_PROP_POS_MSEC)
                 if current_msec > end_sec * 1000:
                     break
@@ -244,8 +399,8 @@ class ParkingApp:
                 for box in boxes:
                     x1, y1, x2, y2 = box.xyxy[0]
                     
-                    # Chúng ta ước tính khối tâm của chiếc xe. 
-                    # Kéo dịch nhẹ tâm xuống dưới do camera thường bắt xiên
+                    # Chúng ta ước tính khối tâm của chiếc xe (cái chấm ấy)
+                    # Kéo dịch nhẹ tâm xuống dưới do camera thường bắt chéo
                     cx = int((x1 + x2) / 2)
                     cy = int(y2 - (y2 - y1) * 0.3)
                     
@@ -257,13 +412,20 @@ class ParkingApp:
             
             # Xử lý vùng đỗ kiểm tra có nằm đè lên đa giác không
             occupied_count = 0
-            for poly in self.polygons:
+            current_status = []
+            for idx, poly in enumerate(self.polygons):
                 poly_np = np.array(poly, np.int32)
                 is_occupied = False
                 for cx, cy in car_centers:
                     if cv2.pointPolygonTest(poly_np, (cx, cy), False) >= 0:
                         is_occupied = True
                         break
+                
+                current_status.append(is_occupied)
+                
+                # Tính tâm đa giác để đánh số
+                pcx = int(sum(p[0] for p in poly) / len(poly))
+                pcy = int(sum(p[1] for p in poly) / len(poly))
                 
                 if is_occupied:
                     # Màu đỏ nếu bị chiếm 
@@ -272,9 +434,13 @@ class ParkingApp:
                 else:
                     # Màu xanh nếu trống
                     cv2.polylines(frame, [poly_np], True, (0, 255, 0), 3)
+                
+                # Đánh số ô đỗ lên video
+                cv2.putText(frame, str(idx + 1), (pcx - 8, pcy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
-            # Thông tin UI trên ảnh
-            cv2.putText(frame, "'Q' for stop", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            self.last_poly_status = current_status
+            
+            cv2.putText(frame, "'Q' stop | 'I' Check In", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             cv2.putText(frame, f"Trang thai: {occupied_count}/{len(self.polygons)} cho", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
                 
             cv2.imshow("Video Detection", frame)
@@ -283,11 +449,25 @@ class ParkingApp:
             wait_time = max(1, delay - elapsed)
             
             # Điều khiển tốc độ chạy video tương ứng với FPS thực (normal speed) tại không muốn delay
-            if cv2.waitKey(wait_time) & 0xFF == ord('q'):
+            key = cv2.waitKey(wait_time) & 0xFF
+            if key == ord('q'):
                 break
+            elif key == ord('i') and self.is_webcam.get():
+                self.show_checkin_popup()
+            
+            # Giữ cho Tkinter vẫn phản hồi (nút Check In, giao diện chính)
+            try:
+                self.root.update()
+            except:
+                pass
                 
         cap.release()
         cv2.destroyWindow("Video Detection")
+        
+        # Reset trạng thái
+        self.detection_active = False
+        self.btn_checkin.config(state='disabled', bg="#95a5a6")
+        self.last_poly_status = []
 
 if __name__ == "__main__":
     root = tk.Tk()
