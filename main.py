@@ -6,9 +6,6 @@ import json
 import sys
 from datetime import datetime
 
-# Vô hiệu hóa biến đổi phần cứng MSMF để khắc phục lỗi OpenCV mở webcam quá lâu (đơ >15s) trên Windows
-os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
-
 from ultralytics import YOLO
 
 from PyQt6.QtWidgets import (
@@ -234,14 +231,13 @@ class DetectionWorker(QObject):
             cap = cv2.VideoCapture(self.app.video_path)
             
         if not cap.isOpened():
-            self.on_error.emit(f"Không thể kết nối với WebCam số {self.app.webcam_index}." if is_webcam else "Không thể đọc đường dẫn video.")
+            self.on_error.emit(f"Không thể kết nối với Camera số {self.app.webcam_index}." if is_webcam else "Không thể đọc đường dẫn video.")
             self.on_finished.emit()
             return
         
         if not is_webcam:
             try:
                 start_sec = float(self.app.entry_start.text())
-                # To simplify we do not limit end time here unless requested
                 end_sec = float(self.app.entry_end.text()) if float(self.app.entry_end.text()) > 0 else float('inf')
             except:
                 start_sec, end_sec = 0.0, float('inf')
@@ -384,7 +380,7 @@ class ParkingAppUI(QMainWindow):
         self.init_ui()
         
     def init_ui(self):
-        self.setWindowTitle("Parking Vehicle Detection - YOLOv8 x PyQt6")
+        self.setWindowTitle("Parking Vehicle Detection")
         self.resize(700, 450)
         
         # Central widget & Layout
@@ -436,7 +432,7 @@ class ParkingAppUI(QMainWindow):
         self.btn_browse.clicked.connect(self.browse_file)
         v_layout1.addWidget(self.btn_browse)
         
-        self.btn_webcam = QPushButton("Sử Dụng Webcam")
+        self.btn_webcam = QPushButton("Sử Dụng Camera")
         self.btn_webcam.clicked.connect(self.choose_webcam)
         v_layout1.addWidget(self.btn_webcam)
         
@@ -484,7 +480,6 @@ class ParkingAppUI(QMainWindow):
         anim.setEndValue(1.0)
         anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
         anim.start()
-        # Keep reference so it doesnt get garbage collected
         widget.anim = anim
         
     def toggle_theme(self):
@@ -511,7 +506,7 @@ class ParkingAppUI(QMainWindow):
             self.entry_start.setText("0")
             self.entry_end.setText("0")
             self.is_webcam = False
-            self.btn_webcam.setText("Sử Dụng Webcam")
+            self.btn_webcam.setText("Sử Dụng Camera")
             self.polygons = []
             
     def choose_webcam(self):
@@ -555,7 +550,7 @@ class ParkingAppUI(QMainWindow):
         self.is_webcam = True
         self.video_path = ""
         self.entry_video.setText(f"Webcam {idx}")
-        self.btn_webcam.setText(f"Đang Chọn Webcam {idx}")
+        self.btn_webcam.setText(f"Đang Chọn Camera {idx}")
         self.entry_start.setEnabled(False)
         self.entry_end.setEnabled(False)
         self.polygons = []
@@ -568,7 +563,7 @@ class ParkingAppUI(QMainWindow):
 
     def start_draw_regions(self):
         if not self.video_path and not self.is_webcam:
-            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn video trước bằng nút Duyệt File hoặc chọn Webcam!")
+            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn video trước bằng nút Duyệt File hoặc chọn Camera!")
             return
             
         presets = self.get_preset_list()
@@ -792,7 +787,7 @@ class ParkingAppUI(QMainWindow):
         
     def show_checkin_popup(self):
         if not self.detection_active or not self.is_webcam:
-            QMessageBox.information(self, "Check In", "Chỉ hoạt động khi đang dùng Webcam.")
+            QMessageBox.information(self, "Check In", "Chỉ hoạt động khi đang dùng Camera.")
             return
             
         status = self.last_poly_status
