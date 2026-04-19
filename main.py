@@ -959,7 +959,6 @@ class ParkingAppUI(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 return item
                 
-            # Rebuild slots
             summary = self.db.get_slot_summary()
             self.table_slot.setRowCount(len(summary))
             self.table_slot.setColumnCount(3)
@@ -971,7 +970,6 @@ class ParkingAppUI(QMainWindow):
                 self.table_slot.setItem(r, 1, centered_item(str(row['total_in'])))
                 self.table_slot.setItem(r, 2, centered_item(str(row['total_out'])))
             
-            # Rebuild history
             hist = self.db.get_history(15)
             self.table_hist.setRowCount(len(hist))
             self.table_hist.setColumnCount(4)
