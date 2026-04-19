@@ -722,6 +722,7 @@
   ('dateutil.zoneinfo',
    'C:\\Users\\ADMIN\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\dateutil\\zoneinfo\\__init__.py',
    'PYMODULE'),
+  ('db_manager', 'E:\\Parking_Detect\\db_manager.py', 'PYMODULE'),
   ('decimal',
    'C:\\Users\\ADMIN\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\decimal.py',
    'PYMODULE'),

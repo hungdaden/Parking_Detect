@@ -1,396 +1,288 @@
 import cv2
 import numpy as np
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import threading
-from ultralytics import YOLO
 import time
+import os
+import json
+import sys
+from datetime import datetime
 
-class ParkingApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Ứng dụng Nhận diện Bãi đỗ xe")
-        self.root.geometry("750x480")
-        
-        # status agru
-        self.video_path = tk.StringVar()
-        self.start_time = tk.DoubleVar(value=0.0)
-        self.end_time = tk.DoubleVar(value=0.0)
-        self.full_video = tk.BooleanVar(value=True)
-        self.is_webcam = tk.BooleanVar(value=False)
-        self.webcam_index = 0
-        self.detection_active = False
-        self.last_poly_status = []  # True = occupied, False = empty
-        
-        self.polygons = [] # ve
-        self.current_polygon = [] # dang ve do
-        
-        # UI
-        self.setup_ui()
-        
-    def setup_ui(self):
-        # Frame trên cùng chứa tiêu đề + nút Check In
-        frame_top = tk.Frame(self.root)
-        frame_top.pack(fill='x', padx=20, pady=(15, 5))
-        
-        # Tiêu đề đây
-        lbl_title = tk.Label(frame_top, text="HỆ THỐNG NHẬN DIỆN BÃI ĐỖ XE", font=("Arial", 16, "bold"), fg="#2c3e50")
-        lbl_title.pack(side='left', expand=True)
-        
-        # Nút Check In góc trên phải
-        self.btn_checkin = tk.Button(frame_top, text="Check In", width=10, bg="#95a5a6", fg="white", font=("Arial", 9, "bold"), state='disabled', command=self.show_checkin_popup)
-        self.btn_checkin.pack(side='right')
-        
-        # Frame chọn file
-        frame_file = tk.Frame(self.root)
-        frame_file.pack(fill='x', padx=30, pady=10)
-        
-        tk.Label(frame_file, text="Đường dẫn Video:").pack(side='top', anchor='w')
-        tk.Entry(frame_file, textvariable=self.video_path, width=70, state='readonly').pack(side='left', pady=5)
-        tk.Button(frame_file, text="Duyệt File...", command=self.browse_file, bg="#bdc3c7").pack(side='left', padx=10)
-        
-        # Frame cấu hình thời gian
-        frame_time = tk.LabelFrame(self.root, text=" Cấu hình Thời gian chạy video ", font=("Arial", 10, "bold"))
-        frame_time.pack(fill='x', padx=30, pady=15, ipadx=10, ipady=10)
-        
-        self.chk_full = tk.Checkbutton(frame_time, text="Chạy toàn bộ video (Full video)", variable=self.full_video, command=self.toggle_entries)
-        self.chk_full.grid(row=0, column=0, columnspan=4, sticky='w', padx=5, pady=5)
-        
-        tk.Label(frame_time, text="Giây Bắt Đầu:").grid(row=1, column=0, sticky='e', padx=5)
-        self.entry_start = tk.Entry(frame_time, textvariable=self.start_time, width=15, state='disabled')
-        self.entry_start.grid(row=1, column=1, sticky='w')
-        
-        tk.Label(frame_time, text="Giây Kết Thúc:").grid(row=1, column=2, sticky='e', padx=20)
-        self.entry_end = tk.Entry(frame_time, textvariable=self.end_time, width=15, state='disabled')
-        self.entry_end.grid(row=1, column=3, sticky='w')
-        
-        # Các nút chức năng chính
-        frame_actions = tk.Frame(self.root)
-        frame_actions.pack(pady=30)
-        
-        self.btn_webcam = tk.Button(frame_actions, text="Sử Dụng Webcam", width=20, height=2, bg="#f39c12", fg="white", font=("Arial", 11, "bold"), command=self.toggle_webcam_button)
-        self.btn_webcam.grid(row=0, column=2, padx=10)
-        
-        tk.Button(frame_actions, text="Khoanh Vùng Đỗ Xe", width=20, height=2, bg="#3498db", fg="white", font=("Arial", 11, "bold"), command=self.draw_regions).grid(row=0, column=0, padx=10)
-        
-        tk.Button(frame_actions, text="Bắt Đầu Nhận Diện", width=20, height=2, bg="#e74c3c", fg="white", font=("Arial", 11, "bold"), command=self.run_detection).grid(row=0, column=1, padx=10)
-        
-        # Hướng dẫn
-        lbl_info = tk.Label(self.root, text="Hướng dẫn vẽ: Click Chuột Trái để chọn điểm, Chuột Phải để khép kín ô.\nNhấn phím Z (hoặc Backspace) để hoàn tác nét vẽ lỗi. Nhấn C để xóa toàn bộ.\nKhi vẽ xong toàn bộ các bãi đỗ, bấm phím SPACE (khoảng trắng) để lưu lại.", fg="#7f8c8d", justify="center")
-        lbl_info.pack(side='bottom', pady=20)
+# Vô hiệu hóa biến đổi phần cứng MSMF để khắc phục lỗi OpenCV mở webcam quá lâu (đơ >15s) trên Windows
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 
-    def browse_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Video Files", "*.mp4 *.avi *.mkv *.mov")])
-        if file_path:
-            self.video_path.set(file_path)
-            # Reset chỗ chọn thời gian
-            self.start_time.set(0.0)
-            self.end_time.set(0.0)
-            self.full_video.set(True)
-            self.is_webcam.set(False)
-            try:
-                self.btn_webcam.config(bg="#f39c12", text="Sử Dụng Webcam")
-            except:
-                pass
-            self.toggle_entries()
-            self.polygons = [] # Reset vùng vẽ
+from ultralytics import YOLO
 
-    def choose_webcam(self):
-        top = tk.Toplevel(self.root)
-        top.title("Chọn Camera")
-        top.geometry("300x200")
-        top.transient(self.root)
-        top.grab_set()
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QPushButton, QLabel, QLineEdit, QFileDialog, QMessageBox, 
+    QListWidget, QFrame, QDialog, QScrollArea, QGridLayout,
+    QGraphicsOpacityEffect, QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView
+)
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer
+from PyQt6.QtGui import QFont, QIcon, QColor, QPalette
+import threading
 
-        lbl_status = tk.Label(top, text="Đang tìm các camera khả dụng...")
-        lbl_status.pack(pady=10)
-        top.update()
+from db_manager import ParkingDB
 
-        available_cameras = []
-        for i in range(5):
-            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-            if cap.isOpened():
-                available_cameras.append(i)
-                cap.release()
-                
-        for widget in top.winfo_children():
-            widget.destroy()
-            
-        def on_close():
-            self.is_webcam.set(False)
-            self.video_path.set("")
-            self.chk_full.config(state='normal')
-            self.btn_webcam.config(bg="#f39c12", text="Sử Dụng Webcam")
-            top.destroy()
-            
-        if not available_cameras:
-            tk.Label(top, text="Không tìm thấy Camera nào!").pack(pady=20)
-            tk.Button(top, text="Đóng", command=on_close).pack()
-            top.protocol("WM_DELETE_WINDOW", on_close)
-            return
+PRESETS_DIR = "presets"
+if not os.path.exists(PRESETS_DIR):
+    os.makedirs(PRESETS_DIR)
 
-        tk.Label(top, text="Vui lòng chọn Camera:").pack(pady=10)
-        
-        selected_cam = tk.IntVar(value=available_cameras[0])
-        for cam in available_cameras:
-            tk.Radiobutton(top, text=f"Camera {cam}", variable=selected_cam, value=cam).pack(anchor='w', padx=100)
-            
-        def on_select():
-            self.webcam_index = selected_cam.get()
-            self.video_path.set(f"Camera {self.webcam_index} (Webcam)")
-            self.full_video.set(True)
-            self.chk_full.config(state='disabled')
-            self.toggle_entries()
-            self.polygons = []
-            self.btn_webcam.config(bg="#27ae60", text=f"Đang Mở Cam {self.webcam_index}")
-            top.destroy()
-            
-        tk.Button(top, text="Xác nhận", command=on_select, bg="#3498db", fg="white").pack(pady=15)
-        top.protocol("WM_DELETE_WINDOW", on_close)
+# ================= THEMES =================
 
-    def toggle_webcam_button(self):
-        new_state = not self.is_webcam.get()
-        self.is_webcam.set(new_state)
-        if new_state:
-            self.choose_webcam()
-        else:
-            self.video_path.set("")
-            self.chk_full.config(state='normal')
-            self.btn_webcam.config(bg="#f39c12", text="Sử Dụng Webcam")
-            
-    def toggle_entries(self):
-        if self.full_video.get():
-            self.entry_start.config(state='disabled')
-            self.entry_end.config(state='disabled')
-        else:
-            self.entry_start.config(state='normal')
-            self.entry_end.config(state='normal')
+LIGHT_THEME = """
+QWidget {
+    background-color: #f5f6fa;
+    color: #2f3640;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+}
+QMainWindow {
+    background-color: #f5f6fa;
+}
+QFrame#MainFrame {
+    background-color: #ffffff;
+    border-radius: 10px;
+    border: 1px solid #dcdde1;
+}
+QPushButton {
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 15px;
+    font-weight: bold;
+}
+QPushButton:hover {
+    background-color: #2980b9;
+}
+QPushButton:disabled {
+    background-color: #bdc3c7;
+    color: #ecf0f1;
+}
+QPushButton#CheckInBtn {
+    background-color: #27ae60;
+}
+QPushButton#CheckInBtn:hover {
+    background-color: #2ecc71;
+}
+QPushButton#CheckInBtn:disabled {
+    background-color: #95a5a6;
+}
+QPushButton#DangerBtn {
+    background-color: #e74c3c;
+}
+QPushButton#DangerBtn:hover {
+    background-color: #c0392b;
+}
+QPushButton#SuccessBtn {
+    background-color: #2ecc71;
+}
+QPushButton#SuccessBtn:hover {
+    background-color: #27ae60;
+}
+QLineEdit {
+    padding: 5px;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+    background-color: #ffffff;
+    color: #2c3e50;
+}
+QListWidget {
+    background-color: #ffffff;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+}
+QListWidget::item:selected {
+    background-color: #3498db;
+    color: white;
+}
+QLabel#HeaderLabel {
+    font-size: 18px;
+    font-weight: bold;
+    color: #2c3e50;
+}
+QLabel#SubHeaderLabel {
+    font-size: 12px;
+    color: #7f8c8d;
+}
+QTableWidget {
+    font-size: 14px;
+    font-weight: bold;
+}
+QHeaderView::section {
+    font-size: 14px;
+    font-weight: bold;
+    background-color: #ecf0f1;
+}
+"""
 
-    def get_start_end(self, cap):
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        if fps <= 0: fps = 30
-        duration = total_frames / fps
-        
-        if self.full_video.get():
-            return 0.0, duration
-        else:
-            start = self.start_time.get()
-            end = self.end_time.get()
-            if end <= 0 or end > duration:
-                end = duration
-            return start, end
+DARK_THEME = """
+QWidget {
+    background-color: #1e272e;
+    color: #f5f6fa;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+}
+QMainWindow {
+    background-color: #1e272e;
+}
+QFrame#MainFrame {
+    background-color: #2f3640;
+    border-radius: 10px;
+    border: 1px solid #353b48;
+}
+QPushButton {
+    background-color: #0984e3;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 15px;
+    font-weight: bold;
+}
+QPushButton:hover {
+    background-color: #74b9ff;
+}
+QPushButton:disabled {
+    background-color: #7f8fa6;
+    color: #dcdde1;
+}
+QPushButton#CheckInBtn {
+    background-color: #00b894;
+}
+QPushButton#CheckInBtn:hover {
+    background-color: #55efc4;
+}
+QPushButton#CheckInBtn:disabled {
+    background-color: #7f8fa6;
+}
+QPushButton#DangerBtn {
+    background-color: #d63031;
+}
+QPushButton#DangerBtn:hover {
+    background-color: #ff7675;
+}
+QPushButton#SuccessBtn {
+    background-color: #00b894;
+}
+QPushButton#SuccessBtn:hover {
+    background-color: #55efc4;
+}
+QLineEdit {
+    padding: 5px;
+    border: 1px solid #7f8fa6;
+    border-radius: 4px;
+    background-color: #353b48;
+    color: #f5f6fa;
+}
+QListWidget {
+    background-color: #353b48;
+    border: 1px solid #7f8fa6;
+    border-radius: 4px;
+    color: #f5f6fa;
+}
+QListWidget::item:selected {
+    background-color: #0984e3;
+    color: white;
+}
+QLabel#HeaderLabel {
+    font-size: 18px;
+    font-weight: bold;
+    color: #00a8ff;
+}
+QLabel#SubHeaderLabel {
+    font-size: 12px;
+    color: #b2bec3;
+}
+QTableWidget {
+    font-size: 14px;
+    font-weight: bold;
+}
+QHeaderView::section {
+    font-size: 14px;
+    font-weight: bold;
+    background-color: #2f3640;
+}
+"""
 
-    def mouse_callback(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            # Chấm một điểm mới
-            self.current_polygon.append((x, y))
-        elif event == cv2.EVENT_RBUTTONDOWN:
-            # Khép kín một mảng điểm thành đa giác
-            if len(self.current_polygon) > 2:
-                self.polygons.append(self.current_polygon.copy())
-                self.current_polygon = []
+# ================= THREADING =================
 
-    def draw_regions(self):
-        if not self.video_path.get():
-            messagebox.showerror("Lỗi", "Vui lòng chọn video trước bằng nút Duyệt File hoặc chọn Webcam!")
-            return
-
-        src = self.webcam_index if self.is_webcam.get() else self.video_path.get()
-        cap = cv2.VideoCapture(src)
-        if not cap.isOpened():
-            messagebox.showerror("Lỗi", "Không thể mở video hoặc Webcam!")
-            return
-
-        if not self.is_webcam.get():
-            start_sec, _ = self.get_start_end(cap)
-            cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
-            
-        ret, frame = cap.read()
-        if not ret:
-            messagebox.showerror("Lỗi", "Không thể đọc khung hình từ video tại mốc thời gian bắt đầu. Thử chọn thời điểm khác.")
-            cap.release()
-            return
-            
-        temp_frame = frame.copy()
+class DetectionWorker(QObject):
+    # Signals
+    on_error = pyqtSignal(str)
+    on_finished = pyqtSignal()
+    show_checkin_signal = pyqtSignal()
+    
+    def __init__(self, app_logic, screen_w, screen_h):
+        super().__init__()
+        self.app = app_logic
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        self._is_running = True
         
-        cv2.namedWindow('Draw Parking Regions', cv2.WINDOW_NORMAL)
-        # Giữ tỉ lệ hình ảnh vừa màn hình nếu video quá to
-        cv2.resizeWindow('Draw Parking Regions', frame.shape[1], frame.shape[0])
-        cv2.setMouseCallback('Draw Parking Regions', self.mouse_callback)
-
-        while True:
-            display = temp_frame.copy()
-            
-            # Vẽ các vùng đã hoàn thành
-            for poly in self.polygons:
-                cv2.polylines(display, [np.array(poly)], True, (255, 0, 0), 2)
-                # Đánh dấu id đa giác
-                cx = int(sum(p[0] for p in poly) / len(poly))
-                cy = int(sum(p[1] for p in poly) / len(poly))
-                cv2.circle(display, (cx, cy), 3, (255, 0, 0), -1)
-                
-            # Vẽ vùng đang vẽ (dùng màu đỏ chờ)
-            if len(self.current_polygon) > 0:
-                for i in range(len(self.current_polygon)):
-                    cv2.circle(display, self.current_polygon[i], 3, (0, 0, 255), -1)
-                    if i > 0:
-                        cv2.line(display, self.current_polygon[i-1], self.current_polygon[i], (0, 0, 255), 2)
-
-            cv2.imshow('Draw Parking Regions', display)
-            key = cv2.waitKey(20) & 0xFF
-            
-            # Phím tắt
-            if key == ord(' ') or key == 13 or key == ord('q'): # Space, Enter, q
-                break
-            elif key == ord('c'): # Bấm C để xóa trắng vẽ lại từ đầu
-                self.polygons.clear()
-                self.current_polygon.clear()
-            elif key == ord('z') or key == 8: # z or Backspace
-                if len(self.current_polygon) > 0:
-                    self.current_polygon.pop()
-                elif len(self.polygons) > 0:
-                    self.polygons.pop()
-                
-        cv2.destroyWindow('Draw Parking Regions')
-        cap.release()
-
-    def show_checkin_popup(self):
-        if not self.detection_active or not self.is_webcam.get():
-            messagebox.showinfo("Check In", "Chức năng Check In chỉ hoạt động khi đang nhận diện bằng Webcam.")
-            return
-        
-        status = self.last_poly_status
-        if not status:
-            messagebox.showinfo("Check In", "Chưa có dữ liệu nhận diện. Vui lòng đợi...")
-            return
-        
-        top = tk.Toplevel(self.root)
-        top.title("Check In - Tình trạng Bãi đỗ")
-        top.geometry("420x500")
-        top.transient(self.root)
-        top.configure(bg="#ecf0f1")
-        
-        # Header
-        tk.Label(top, text="TÌNH TRẠNG BÃI ĐỖ XE", font=("Arial", 14, "bold"), fg="#2c3e50", bg="#ecf0f1").pack(pady=(15, 5))
-        
-        empty_slots = [i + 1 for i, occupied in enumerate(status) if not occupied]
-        occupied_slots = [i + 1 for i, occupied in enumerate(status) if occupied]
-        total = len(status)
-        
-        summary_text = f"Trống: {len(empty_slots)}/{total}   |   Đã đỗ: {len(occupied_slots)}/{total}"
-        tk.Label(top, text=summary_text, font=("Arial", 11), fg="#34495e", bg="#ecf0f1").pack(pady=5)
-        
-        frame_list = tk.Frame(top, bg="#ecf0f1")
-        frame_list.pack(fill='both', expand=True, padx=20, pady=10)
-        
-        canvas = tk.Canvas(frame_list, bg="#ecf0f1", highlightthickness=0)
-        scrollbar = tk.Scrollbar(frame_list, orient='vertical', command=canvas.yview)
-        scroll_frame = tk.Frame(canvas, bg="#ecf0f1")
-        
-        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_frame, anchor='nw')
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side='left', fill='both', expand=True)
-        scrollbar.pack(side='right', fill='y')
-        
-        for idx in range(total):
-            slot_num = idx + 1
-            is_occ = status[idx]
-            
-            row_frame = tk.Frame(scroll_frame, bg="white", bd=1, relief='groove')
-            row_frame.pack(fill='x', pady=2, padx=5)
-            
-            if is_occ:
-                icon = "🔴"
-                text = f"  Ô {slot_num}:  Đã có xe"
-                color = "#e74c3c"
-            else:
-                icon = "🟢"
-                text = f"  Ô {slot_num}:  Còn trống"
-                color = "#27ae60"
-            
-            tk.Label(row_frame, text=icon, font=("Arial", 12), bg="white").pack(side='left', padx=(10, 0))
-            tk.Label(row_frame, text=text, font=("Arial", 11, "bold"), fg=color, bg="white", anchor='w').pack(side='left', fill='x', expand=True, pady=8)
-        
-        # Thông báo hướng dẫn
-        msg_frame = tk.Frame(top, bg="#ecf0f1")
-        msg_frame.pack(fill='x', padx=20, pady=(0, 15))
-        
-        if empty_slots:
-            guide_text = f"✅ Vui lòng tiến vào Ô {empty_slots[0]} để đỗ xe."
-            if len(empty_slots) > 1:
-                other = ", ".join(str(s) for s in empty_slots[1:])
-                guide_text += f"\nCác ô trống khác: {other}"
-            guide_color = "#27ae60"
-        else:
-            guide_text = "⛔ Bãi đỗ đã đầy. Vui lòng quay lại sau."
-            guide_color = "#e74c3c"
-        
-        tk.Label(msg_frame, text=guide_text, font=("Arial", 11, "bold"), fg=guide_color, bg="#ecf0f1", justify='center', wraplength=380).pack(pady=5)
-        
-        def close_and_refocus():
-            top.destroy()
-            try:
-                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 1)
-                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 0)
-            except:
-                pass
-        
-        tk.Button(top, text="Đóng", command=close_and_refocus, bg="#3498db", fg="white", font=("Arial", 10, "bold"), width=12).pack(pady=(0, 15))
-        top.protocol("WM_DELETE_WINDOW", close_and_refocus)
-
-    def run_detection(self):
-        if not self.video_path.get():
-            messagebox.showerror("Lỗi", "Vui lòng chọn video trước!")
-            return
-            
-        if not self.polygons:
-            res = messagebox.askyesno("Cảnh báo", "Bạn chưa khoanh vùng nhận diện bãi đỗ nào!\nVideo sẽ chạy nhưng không hiện chỗ trống đậu xe. Bạn có muốn tiếp tục chạy luôn không?")
-            if not res:
-                return
-
+    def run(self):
         try:
-            # Load mô hình YOLO 
             model = YOLO('yolov8n.pt')
         except Exception as e:
-            messagebox.showerror("Lỗi YOLO Model", f"Gặp sự cố khi khởi tạo model: {e}")
+            self.on_error.emit(f"Gặp sự cố khi khởi tạo model YOLO: {e}")
+            return
+            
+        is_webcam = self.app.is_webcam
+        
+        if is_webcam:
+            cap = cv2.VideoCapture(self.app.webcam_index)
+        else:
+            cap = cv2.VideoCapture(self.app.video_path)
+            
+        if not cap.isOpened():
+            self.on_error.emit(f"Không thể kết nối với WebCam số {self.app.webcam_index}." if is_webcam else "Không thể đọc đường dẫn video.")
+            self.on_finished.emit()
             return
         
-        src = self.webcam_index if self.is_webcam.get() else self.video_path.get()
-        cap = cv2.VideoCapture(src)
-        
-        if not self.is_webcam.get():
-            start_sec, end_sec = self.get_start_end(cap)
+        if not is_webcam:
+            try:
+                start_sec = float(self.app.entry_start.text())
+                # To simplify we do not limit end time here unless requested
+                end_sec = float(self.app.entry_end.text()) if float(self.app.entry_end.text()) > 0 else float('inf')
+            except:
+                start_sec, end_sec = 0.0, float('inf')
             cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
         else:
             start_sec, end_sec = 0.0, float('inf')
-        
+            
         fps = cap.get(cv2.CAP_PROP_FPS)
         delay = int(1000 / fps) if fps > 0 else 30
         
-        # Kích hoạt trạng thái detection và nút Check In (chỉ webcam)
-        self.detection_active = True
-        if self.is_webcam.get():
-            self.btn_checkin.config(state='normal', bg="#27ae60")
-            # Fullscreen cho webcam
-            cv2.namedWindow("Video Detection", cv2.WND_PROP_FULLSCREEN)
-            cv2.setWindowProperty("Video Detection", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        self.app.prev_poly_status = [False] * len(self.app.polygons)
         
-        while cap.isOpened():
-            if not self.is_webcam.get():
+        DEBOUNCE_THRESHOLD = 10
+        debounce_counters = [0] * len(self.app.polygons)
+        confirmed_status = [False] * len(self.app.polygons)
+        
+        if self.app.polygons:
+            self.app.db.reset_slot_status(len(self.app.polygons))
+            
+        polygons_copy = [poly[:] for poly in self.app.polygons]
+        preset_name = self.app.current_preset_name
+        
+        if is_webcam:
+            w = int(self.screen_w * 2 / 3)
+            h = self.screen_h - 100
+            cv2.namedWindow("Video Detection", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("Video Detection", w, h)
+            cv2.moveWindow("Video Detection", 0, 0)
+            
+        while cap.isOpened() and self._is_running:
+            if not is_webcam:
                 current_msec = cap.get(cv2.CAP_PROP_POS_MSEC)
                 if current_msec > end_sec * 1000:
                     break
-                
+                    
             start_time_proc = time.time()
             
             ret, frame = cap.read()
             if not ret:
                 break
                 
-            # Dự đoán (Classes: 2 là car, 5 là bus, 7 là truck)
             results = model.predict(frame, stream=True, verbose=False, classes=[2, 5, 7])
             
             car_centers = []
@@ -398,22 +290,15 @@ class ParkingApp:
                 boxes = r.boxes
                 for box in boxes:
                     x1, y1, x2, y2 = box.xyxy[0]
-                    
-                    # Chúng ta ước tính khối tâm của chiếc xe (cái chấm ấy)
-                    # Kéo dịch nhẹ tâm xuống dưới do camera thường bắt chéo
                     cx = int((x1 + x2) / 2)
                     cy = int(y2 - (y2 - y1) * 0.3)
-                    
                     car_centers.append((cx, cy))
-                    
-                    # Vẽ bounding box nhẹ màu xám lên các xe
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (200, 200, 200), 1)
                     cv2.circle(frame, (cx, cy), 4, (0, 255, 255), -1)
-            
-            # Xử lý vùng đỗ kiểm tra có nằm đè lên đa giác không
+                    
             occupied_count = 0
             current_status = []
-            for idx, poly in enumerate(self.polygons):
+            for idx, poly in enumerate(polygons_copy):
                 poly_np = np.array(poly, np.int32)
                 is_occupied = False
                 for cx, cy in car_centers:
@@ -422,54 +307,688 @@ class ParkingApp:
                         break
                 
                 current_status.append(is_occupied)
-                
-                # Tính tâm đa giác để đánh số
                 pcx = int(sum(p[0] for p in poly) / len(poly))
                 pcy = int(sum(p[1] for p in poly) / len(poly))
                 
                 if is_occupied:
-                    # Màu đỏ nếu bị chiếm 
                     cv2.polylines(frame, [poly_np], True, (0, 0, 255), 3)
                     occupied_count += 1
                 else:
-                    # Màu xanh nếu trống
                     cv2.polylines(frame, [poly_np], True, (0, 255, 0), 3)
                 
-                # Đánh số ô đỗ lên video
                 cv2.putText(frame, str(idx + 1), (pcx - 8, pcy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            self.last_poly_status = current_status
+                
+            if len(current_status) == len(confirmed_status):
+                for idx in range(len(current_status)):
+                    if current_status[idx] != confirmed_status[idx]:
+                        debounce_counters[idx] += 1
+                        if debounce_counters[idx] >= DEBOUNCE_THRESHOLD:
+                            slot_id = idx + 1
+                            if current_status[idx] and not confirmed_status[idx]:
+                                self.app.db.record_vehicle_in(slot_id, preset_name)
+                            elif not current_status[idx] and confirmed_status[idx]:
+                                self.app.db.record_vehicle_out(slot_id, preset_name)
+                            confirmed_status[idx] = current_status[idx]
+                            debounce_counters[idx] = 0
+                    else:
+                        debounce_counters[idx] = 0
+                        
+            self.app.last_poly_status = current_status
             
             cv2.putText(frame, "'Q' stop | 'I' Check In", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            cv2.putText(frame, f"Trang thai: {occupied_count}/{len(self.polygons)} cho", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
-                
+            cv2.putText(frame, f"Trang thai: {occupied_count}/{len(polygons_copy)} cho", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+            
             cv2.imshow("Video Detection", frame)
             
             elapsed = int((time.time() - start_time_proc) * 1000)
             wait_time = max(1, delay - elapsed)
             
-            # Điều khiển tốc độ chạy video tương ứng với FPS thực (normal speed) tại không muốn delay
             key = cv2.waitKey(wait_time) & 0xFF
             if key == ord('q'):
                 break
-            elif key == ord('i') and self.is_webcam.get():
-                self.show_checkin_popup()
+            elif key == ord('i') and is_webcam:
+                self.show_checkin_signal.emit()
+                
+        cap.release()
+        try:
+            cv2.destroyWindow("Video Detection")
+        except:
+            pass
             
-            # Giữ cho Tkinter vẫn phản hồi (nút Check In, giao diện chính)
+        self.on_finished.emit()
+
+    def stop(self):
+        self._is_running = False
+
+
+# ================= MAIN UI =================
+
+class ParkingAppUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        # State
+        self.db = ParkingDB()
+        self.polygons = []
+        self.current_polygon = []
+        self.current_preset_name = ""
+        self.video_path = ""
+        self.is_webcam = False
+        self.webcam_index = 0
+        
+        self.detection_active = False
+        self.last_poly_status = []
+        self.prev_poly_status = []
+        
+        self.is_dark_mode = False # Default to light mode
+        
+        self.init_ui()
+        
+    def init_ui(self):
+        self.setWindowTitle("Parking Vehicle Detection - YOLOv8 x PyQt6")
+        self.resize(700, 450)
+        
+        # Central widget & Layout
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Header Controls
+        header_layout = QHBoxLayout()
+        self.toggle_theme_btn = QPushButton("🌞 Chế độ Sáng")
+        self.toggle_theme_btn.clicked.connect(self.toggle_theme)
+        header_layout.addWidget(self.toggle_theme_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        
+        header_layout.addStretch()
+        
+        self.btn_dashboard = QPushButton("📊 Báo Cáo")
+        self.btn_dashboard.clicked.connect(self.show_dashboard)
+        header_layout.addWidget(self.btn_dashboard)
+        
+        self.btn_checkin = QPushButton("✅ Check In")
+        self.btn_checkin.setObjectName("CheckInBtn")
+        self.btn_checkin.clicked.connect(self.show_checkin_popup)
+        self.btn_checkin.setEnabled(False)
+        header_layout.addWidget(self.btn_checkin)
+        
+        main_layout.addLayout(header_layout)
+        
+        # Main Frame Box
+        frame_main = QFrame()
+        frame_main.setObjectName("MainFrame")
+        frame_layout = QVBoxLayout(frame_main)
+        frame_layout.setContentsMargins(20, 20, 20, 20)
+        frame_layout.setSpacing(15)
+        
+        lbl_title = QLabel("PARKING DETECTION SETTINGS")
+        lbl_title.setObjectName("HeaderLabel")
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        frame_layout.addWidget(lbl_title)
+        
+        # Video settings
+        v_layout1 = QHBoxLayout()
+        v_layout1.addWidget(QLabel("Video/Camera:"))
+        self.entry_video = QLineEdit()
+        self.entry_video.setReadOnly(True)
+        v_layout1.addWidget(self.entry_video)
+        
+        self.btn_browse = QPushButton("Duyệt File")
+        self.btn_browse.clicked.connect(self.browse_file)
+        v_layout1.addWidget(self.btn_browse)
+        
+        self.btn_webcam = QPushButton("Sử Dụng Webcam")
+        self.btn_webcam.clicked.connect(self.choose_webcam)
+        v_layout1.addWidget(self.btn_webcam)
+        
+        frame_layout.addLayout(v_layout1)
+        
+        # Time settings
+        v_layout2 = QHBoxLayout()
+        v_layout2.addWidget(QLabel("Thời điểm bắt đầu (giây):"))
+        self.entry_start = QLineEdit("0")
+        v_layout2.addWidget(self.entry_start)
+        
+        v_layout2.addWidget(QLabel("Thời điểm kết thúc (giây):"))
+        self.entry_end = QLineEdit("0")
+        v_layout2.addWidget(self.entry_end)
+        
+        frame_layout.addLayout(v_layout2)
+        
+        lbl_hint = QLabel("0 = chạy hết video")
+        lbl_hint.setObjectName("SubHeaderLabel")
+        frame_layout.addWidget(lbl_hint)
+        
+        # Action Buttons
+        v_layout3 = QHBoxLayout()
+        self.btn_mark = QPushButton("Khoanh Vùng Đỗ Xe")
+        self.btn_mark.clicked.connect(self.start_draw_regions)
+        v_layout3.addWidget(self.btn_mark)
+        
+        self.btn_detect = QPushButton("BẮT ĐẦU NHẬN DIỆN")
+        self.btn_detect.setObjectName("SuccessBtn")
+        self.btn_detect.clicked.connect(self.start_detection)
+        v_layout3.addWidget(self.btn_detect)
+        
+        frame_layout.addLayout(v_layout3)
+        main_layout.addWidget(frame_main)
+        main_layout.addStretch()
+        
+        self.apply_theme()
+        
+    def fade_in(self, widget):
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity")
+        anim.setDuration(400)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        anim.start()
+        # Keep reference so it doesnt get garbage collected
+        widget.anim = anim
+        
+    def toggle_theme(self):
+        self.is_dark_mode = not self.is_dark_mode
+        self.apply_theme()
+        if self.is_dark_mode:
+            self.toggle_theme_btn.setText("🌞 Chế độ Sáng")
+        else:
+            self.toggle_theme_btn.setText("🌙 Chế độ Tối")
+            
+    def apply_theme(self):
+        theme = DARK_THEME if self.is_dark_mode else LIGHT_THEME
+        self.setStyleSheet(theme)
+        if hasattr(self, 'dash') and self.dash.isVisible():
+            self.dash.setStyleSheet(theme)
+        if hasattr(self, '_checkin_dialog') and self._checkin_dialog.isVisible():
+            self._checkin_dialog.setStyleSheet(theme)
+        
+    def browse_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Chọn Video", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
+        if file_path:
+            self.video_path = file_path
+            self.entry_video.setText(file_path)
+            self.entry_start.setText("0")
+            self.entry_end.setText("0")
+            self.is_webcam = False
+            self.btn_webcam.setText("Sử Dụng Webcam")
+            self.polygons = []
+            
+    def choose_webcam(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Chọn Camera")
+        dialog.resize(300, 200)
+        layout = QVBoxLayout(dialog)
+        
+        layout.addWidget(QLabel("Đang tìm các camera khả dụng..."))
+        # Force UI update
+        QApplication.processEvents()
+        
+        available_cameras = []
+        for i in range(5):
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                available_cameras.append(i)
+                cap.release()
+                
+        # clear loading
+        for i in reversed(range(layout.count())): 
+            layout.itemAt(i).widget().setParent(None)
+            
+        if not available_cameras:
+            layout.addWidget(QLabel("Không tìm thấy camera nào."))
+            btn = QPushButton("Đóng")
+            btn.clicked.connect(dialog.accept)
+            layout.addWidget(btn)
+        else:
+            layout.addWidget(QLabel("Chọn một camera:"))
+            for cam_idx in available_cameras:
+                btn = QPushButton(f"Camera {cam_idx}")
+                btn.clicked.connect(lambda checked, idx=cam_idx: self.set_webcam(idx, dialog))
+                layout.addWidget(btn)
+                
+        self.fade_in(dialog)
+        dialog.exec()
+        
+    def set_webcam(self, idx, dialog):
+        self.webcam_index = idx
+        self.is_webcam = True
+        self.video_path = ""
+        self.entry_video.setText(f"Webcam {idx}")
+        self.btn_webcam.setText(f"Đang Chọn Webcam {idx}")
+        self.entry_start.setEnabled(False)
+        self.entry_end.setEnabled(False)
+        self.polygons = []
+        dialog.accept()
+
+    def get_preset_list(self):
+        files = [f for f in os.listdir(PRESETS_DIR) if f.endswith('.json')]
+        files.sort(key=lambda x: os.path.getmtime(os.path.join(PRESETS_DIR, x)), reverse=True)
+        return [f.replace('.json', '') for f in files]
+
+    def start_draw_regions(self):
+        if not self.video_path and not self.is_webcam:
+            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn video trước bằng nút Duyệt File hoặc chọn Webcam!")
+            return
+            
+        presets = self.get_preset_list()
+        if not presets:
+            self.execute_draw()
+            return
+            
+        self.show_preset_dialog(presets)
+        
+    def show_preset_dialog(self, presets):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Chọn Preset hoặc Vẽ mới")
+        dialog.resize(400, 350)
+        layout = QVBoxLayout(dialog)
+        
+        lbl = QLabel("CHỌN VÙNG ĐỖ XE")
+        lbl.setObjectName("HeaderLabel")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl)
+        
+        layout.addWidget(QLabel("Chọn preset có sẵn hoặc vẽ mới:"))
+        
+        lw = QListWidget()
+        lw.addItems(presets)
+        layout.addWidget(lw)
+        
+        btn_layout = QHBoxLayout()
+        
+        btn_load = QPushButton("Tải Preset")
+        btn_load.setObjectName("SuccessBtn")
+        btn_draw = QPushButton("Vẽ Mới")
+        btn_del = QPushButton("Xóa Preset")
+        btn_del.setObjectName("DangerBtn")
+        
+        btn_layout.addWidget(btn_load)
+        btn_layout.addWidget(btn_draw)
+        btn_layout.addWidget(btn_del)
+        layout.addLayout(btn_layout)
+        
+        def on_load():
+            item = lw.currentItem()
+            if not item:
+                QMessageBox.warning(dialog, "Chưa chọn", "Vui lòng chọn một preset từ danh sách.")
+                return
+            self.load_preset(item.text())
+            dialog.accept()
+            
+        def on_draw():
+            dialog.accept()
+            self.execute_draw()
+            
+        def on_del():
+            item = lw.currentItem()
+            if not item:
+                QMessageBox.warning(dialog, "Chưa chọn", "Vui lòng chọn một preset.")
+                return
+            name = item.text()
+            rep = QMessageBox.question(dialog, "Xác nhận", f"Bạn có chắc muốn xóa preset '{name}'?")
+            if rep == QMessageBox.StandardButton.Yes:
+                p = os.path.join(PRESETS_DIR, name + ".json")
+                if os.path.exists(p): os.remove(p)
+                lw.takeItem(lw.row(item))
+                
+        btn_load.clicked.connect(on_load)
+        btn_draw.clicked.connect(on_draw)
+        btn_del.clicked.connect(on_del)
+        
+        self.fade_in(dialog)
+        dialog.exec()
+        
+    def load_preset(self, name):
+        p = os.path.join(PRESETS_DIR, name + ".json")
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.polygons = [list(map(tuple, poly)) for poly in data.get("polygons", [])]
+            self.current_preset_name = name
+            QMessageBox.information(self, "Thành công", f"Đã tải preset '{name}' với {len(self.polygons)} ô đỗ.")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", f"Lỗi tải preset: {e}")
+
+    def execute_draw(self):
+        # Implement raw OpenCV drawing logic with blocking waitKey
+        if self.is_webcam:
+            cap = cv2.VideoCapture(self.webcam_index)
+        else:
+            cap = cv2.VideoCapture(self.video_path)
+        
+        if not self.is_webcam:
             try:
-                self.root.update()
+                start_sec = float(self.entry_start.text())
+                cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
             except:
                 pass
                 
-        cap.release()
-        cv2.destroyWindow("Video Detection")
+        ret, frame = cap.read()
+        if not ret:
+            QMessageBox.critical(self, "Lỗi", "Không thể đọc khung hình từ video.")
+            cap.release()
+            return
+            
+        temp_frame = frame.copy()
+        cv2.namedWindow('Draw Parking Regions', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('Draw Parking Regions', frame.shape[1], frame.shape[0])
         
-        # Reset trạng thái
+        self.current_polygon = []
+        
+        def mouse_callback(event, x, y, flags, param):
+            if event == cv2.EVENT_LBUTTONDOWN:
+                self.current_polygon.append((x, y))
+            elif event == cv2.EVENT_RBUTTONDOWN:
+                if len(self.current_polygon) > 2:
+                    self.polygons.append(self.current_polygon.copy())
+                    self.current_polygon = []
+                    
+        cv2.setMouseCallback('Draw Parking Regions', mouse_callback)
+        
+        while True:
+            display = temp_frame.copy()
+            for i, poly in enumerate(self.polygons):
+                cv2.polylines(display, [np.array(poly)], True, (255, 0, 0), 2)
+                cx = int(sum(p[0] for p in poly) / len(poly))
+                cy = int(sum(p[1] for p in poly) / len(poly))
+                cv2.putText(display, str(i + 1), (cx - 8, cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            
+            if self.current_polygon:
+                for i in range(len(self.current_polygon)):
+                    cv2.circle(display, self.current_polygon[i], 3, (0, 0, 255), -1)
+                    if i > 0:
+                        cv2.line(display, self.current_polygon[i-1], self.current_polygon[i], (0, 0, 255), 2)
+                        
+            cv2.imshow('Draw Parking Regions', display)
+            key = cv2.waitKey(20) & 0xFF
+            
+            if key == ord(' ') or key == 13 or key == ord('q'):
+                break
+            elif key == ord('c'):
+                self.polygons.clear()
+                self.current_polygon.clear()
+            elif key == ord('z') or key == 8:
+                if self.current_polygon: self.current_polygon.pop()
+                elif self.polygons: self.polygons.pop()
+                
+        cv2.destroyWindow('Draw Parking Regions')
+        cap.release()
+        
+        if self.polygons:
+            self.show_save_preset_dialog()
+            
+    def show_save_preset_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Lưu Preset")
+        dialog.resize(350, 180)
+        layout = QVBoxLayout(dialog)
+        
+        lbl = QLabel("ĐẶT TÊN PRESET")
+        lbl.setObjectName("HeaderLabel")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl)
+        
+        layout.addWidget(QLabel(f"Đã vẽ {len(self.polygons)} ô đỗ. Nhập tên:"))
+        
+        name_entry = QLineEdit(f"Preset_{datetime.now().strftime('%d%m_%H%M')}")
+        layout.addWidget(name_entry)
+        
+        btn_save = QPushButton("Lưu")
+        btn_save.setObjectName("SuccessBtn")
+        layout.addWidget(btn_save)
+        
+        def on_save():
+            name = name_entry.text().strip()
+            if not name: return
+            data = {
+                "name": name,
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "polygons": [list(map(list, poly)) for poly in self.polygons]
+            }
+            p = os.path.join(PRESETS_DIR, name + ".json")
+            with open(p, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            self.current_preset_name = name
+            QMessageBox.information(dialog, "Thành công", f"Đã lưu preset '{name}'!")
+            dialog.accept()
+            
+        btn_save.clicked.connect(on_save)
+        self.fade_in(dialog)
+        dialog.exec()
+        
+    def start_detection(self):
+        if self.detection_active: return
+        
+        if not self.video_path and not self.is_webcam:
+            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn video trước!")
+            return
+        
+        if not self.polygons:
+            res = QMessageBox.question(self, "Cảnh báo", "Bạn chưa khoanh vùng nhận diện bãi đỗ nào!\nVideo sẽ chạy nhưng không hiện chỗ trống đậu xe. Bạn có muốn tiếp tục chạy luôn không?")
+            if res == QMessageBox.StandardButton.No:
+                return
+            
+        screen = QApplication.primaryScreen().geometry()
+        self.worker = DetectionWorker(self, screen.width(), screen.height())
+        self.worker.on_error.connect(lambda e: QMessageBox.critical(self, "Lỗi", e))
+        self.worker.show_checkin_signal.connect(self.show_checkin_popup)
+        self.worker.on_finished.connect(self._on_detection_finished)
+        
+        self.detection_active = True
+        self.btn_detect.setText("ĐANG CHẠY...")
+        self.btn_detect.setEnabled(False)
+        self.btn_checkin.setEnabled(self.is_webcam)
+        
+        # Use python threading to avoid Qt Event Loop deadlock with cv2 UI functions
+        t = threading.Thread(target=self.worker.run, daemon=True)
+        t.start()
+        
+    def _on_detection_finished(self):
         self.detection_active = False
-        self.btn_checkin.config(state='disabled', bg="#95a5a6")
-        self.last_poly_status = []
+        self.btn_detect.setText("BẮT ĐẦU NHẬN DIỆN")
+        self.btn_detect.setEnabled(True)
+        self.btn_checkin.setEnabled(False)
+        
+    def show_checkin_popup(self):
+        if not self.detection_active or not self.is_webcam:
+            QMessageBox.information(self, "Check In", "Chỉ hoạt động khi đang dùng Webcam.")
+            return
+            
+        status = self.last_poly_status
+        if not status:
+            QMessageBox.information(self, "Check In", "Chưa có dữ liệu. Vui lòng đợi...")
+            return
+            
+        dialog = QDialog() # Independent window
+        dialog.setWindowTitle("Check In")
+        dialog.resize(420, 500)
+        dialog.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(dialog)
+        
+        lbl = QLabel("TÌNH TRẠNG BÃI ĐỖ XE")
+        lbl.setObjectName("HeaderLabel")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl)
+        
+        empty_slots = [i+1 for i, occ in enumerate(status) if not occ]
+        occ_slots = [i+1 for i, occ in enumerate(status) if occ]
+        tot = len(status)
+        
+        layout.addWidget(QLabel(f"Trống: {len(empty_slots)}/{tot}   |   Đã đỗ: {len(occ_slots)}/{tot}"))
+        
+        sa = QScrollArea()
+        sa.setWidgetResizable(True)
+        w = QWidget()
+        wl = QVBoxLayout(w)
+        
+        for idx in range(tot):
+            slot = idx + 1
+            is_occ = status[idx]
+            
+            f = QFrame()
+            f.setObjectName("MainFrame") # Reuse border style
+            fl = QHBoxLayout(f)
+            
+            if is_occ:
+                txt = f"🔴  Ô {slot}:  Đã có xe"
+                col = "#e74c3c"
+            else:
+                txt = f"🟢  Ô {slot}:  Còn trống"
+                col = "#27ae60"
+                
+            l = QLabel(txt)
+            l.setStyleSheet(f"color: {col}; font-weight: bold; font-size: 14px;")
+            fl.addWidget(l)
+            wl.addWidget(f)
+            
+        wl.addStretch()
+        sa.setWidget(w)
+        layout.addWidget(sa)
+        
+        if empty_slots:
+            g = f"✅ Vui lòng tiến vào Ô {empty_slots[0]}."
+            c = "#27ae60"
+        else:
+            g = "⛔ Bãi đỗ đã đầy."
+            c = "#e74c3c"
+            
+        glbl = QLabel(g)
+        glbl.setStyleSheet(f"color: {c}; font-weight: bold; font-size: 14px;")
+        glbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(glbl)
+        
+        def on_close():
+            dialog.accept()
+            try:
+                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 1)
+                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 0)
+            except: pass
+
+        btn = QPushButton("Đóng")
+        btn.clicked.connect(on_close)
+        layout.addWidget(btn)
+        
+        self._checkin_dialog = dialog
+        self.fade_in(dialog)
+        dialog.show()
+
+    def show_dashboard(self):
+        self.dash = QDialog()
+        self.dash.setWindowTitle("📊 Báo Cáo & Thống Kê")
+        self.dash.resize(600, 580)
+        self.dash.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(self.dash)
+        
+        lbl = QLabel("BÁO CÁO & THỐNG KÊ")
+        lbl.setObjectName("HeaderLabel")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl)
+        
+        # Thống kê hôm nay
+        self.f_stats = QFrame()
+        self.f_stats.setObjectName("MainFrame")
+        sl = QHBoxLayout(self.f_stats)
+        
+        self.lbl_in = QLabel("Lượt vào: 0")
+        self.lbl_out = QLabel("Lượt ra: 0")
+        self.lbl_occ = QLabel("Đang đỗ: 0")
+        for l in [self.lbl_in, self.lbl_out, self.lbl_occ]:
+            l.setStyleSheet("font-size: 14px; font-weight: bold; color: #2980b9;" if not self.is_dark_mode else "font-size: 14px; font-weight: bold; color: #00a8ff;")
+            sl.addWidget(l)
+            
+        layout.addWidget(QLabel("Thống kê hôm nay"))
+        layout.addWidget(self.f_stats)
+        
+        # Thống kê theo ô
+        layout.addWidget(QLabel("Thống kê theo Ô đỗ"))
+        self.table_slot = QTableWidget()
+        self.table_slot.setMinimumHeight(150)
+        layout.addWidget(self.table_slot)
+        
+        # Lịch sử
+        layout.addWidget(QLabel("Lịch sử gần nhất"))
+        self.table_hist = QTableWidget()
+        self.table_hist.setMinimumHeight(150)
+        layout.addWidget(self.table_hist)
+        
+        btn_clear = QPushButton("🗑️ Xóa Báo Cáo")
+        btn_clear.setObjectName("DangerBtn")
+        btn_clear.clicked.connect(self._clear_dashboard)
+        layout.addWidget(btn_clear)
+        
+        self.timer = QTimer(self.dash)
+        self.timer.timeout.connect(self._refresh_dashboard)
+        self.timer.start(1500)
+        
+        self._refresh_dashboard()
+        self.fade_in(self.dash)
+        self.dash.show()
+        
+    def _clear_dashboard(self):
+        rep = QMessageBox.question(self.dash, "Xác nhận", "Xóa toàn bộ dữ liệu báo cáo?")
+        if rep == QMessageBox.StandardButton.Yes:
+            self.db.clear_all_data()
+            self._refresh_dashboard()
+            
+    def _refresh_dashboard(self):
+        try:
+            stats = self.db.get_today_stats()
+            self.lbl_in.setText(f"🚗 Lượt vào: {stats['total_in']}")
+            self.lbl_out.setText(f"🚙 Lượt ra: {stats['total_out']}")
+            self.lbl_occ.setText(f"🅿️ Đang đỗ: {stats['currently_occupied']}")
+            
+            def centered_item(text):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                return item
+                
+            # Rebuild slots
+            summary = self.db.get_slot_summary()
+            self.table_slot.setRowCount(len(summary))
+            self.table_slot.setColumnCount(3)
+            self.table_slot.setHorizontalHeaderLabels(["Ô đỗ", "Lượt vào", "Lượt ra"])
+            self.table_slot.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            
+            for r, row in enumerate(summary):
+                self.table_slot.setItem(r, 0, centered_item(f"Ô {row['slot_id']}"))
+                self.table_slot.setItem(r, 1, centered_item(str(row['total_in'])))
+                self.table_slot.setItem(r, 2, centered_item(str(row['total_out'])))
+            
+            # Rebuild history
+            hist = self.db.get_history(15)
+            self.table_hist.setRowCount(len(hist))
+            self.table_hist.setColumnCount(4)
+            self.table_hist.setHorizontalHeaderLabels(["Thời gian", "Ô đỗ", "Xe", "Sự kiện"])
+            self.table_hist.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            
+            for r, ev in enumerate(hist):
+                ts = ev["timestamp"][11:19] if len(ev["timestamp"])>11 else ""
+                txt = "VÀO" if ev["event_type"] == "IN" else "RA"
+                
+                self.table_hist.setItem(r, 0, centered_item(ts))
+                self.table_hist.setItem(r, 1, centered_item(f"Ô {ev['slot_id']}"))
+                self.table_hist.setItem(r, 2, centered_item(ev["vehicle_id"] or ""))
+                
+                item_event = centered_item(txt)
+                item_event.setForeground(QColor("#27ae60" if ev["event_type"] == "IN" else "#e67e22"))
+                font = item_event.font()
+                font.setBold(True)
+                item_event.setFont(font)
+                self.table_hist.setItem(r, 3, item_event)
+            
+        except Exception as e:
+            print("Refresh err", e)
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = ParkingApp(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    
+    # Enable High DPI scaling
+    if hasattr(Qt.ApplicationAttribute, "AA_EnableHighDpiScaling"):
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
+    if hasattr(Qt.ApplicationAttribute, "AA_UseHighDpiPixmaps"):
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
+        
+    window = ParkingAppUI()
+    window.show()
+    sys.exit(app.exec())

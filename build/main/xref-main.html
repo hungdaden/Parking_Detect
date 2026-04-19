@@ -26,6 +26,8 @@ imports:
  &#8226;   <a href="#collections.abc">collections.abc</a>
  &#8226;   <a href="#copyreg">copyreg</a>
  &#8226;   <a href="#cv2">cv2</a>
+ &#8226;   <a href="#datetime">datetime</a>
+ &#8226;   <a href="#db_manager">db_manager</a>
  &#8226;   <a href="#encodings">encodings</a>
  &#8226;   <a href="#encodings.aliases">encodings.aliases</a>
  &#8226;   <a href="#encodings.ascii">encodings.ascii</a>
@@ -153,6 +155,7 @@ imports:
  &#8226;   <a href="#genericpath">genericpath</a>
  &#8226;   <a href="#heapq">heapq</a>
  &#8226;   <a href="#io">io</a>
+ &#8226;   <a href="#json">json</a>
  &#8226;   <a href="#keyword">keyword</a>
  &#8226;   <a href="#linecache">linecache</a>
  &#8226;   <a href="#locale">locale</a>
@@ -182,6 +185,7 @@ imports:
  &#8226;   <a href="#tkinter">tkinter</a>
  &#8226;   <a href="#tkinter.filedialog">tkinter.filedialog</a>
  &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
+ &#8226;   <a href="#tkinter.simpledialog">tkinter.simpledialog</a>
  &#8226;   <a href="#traceback">traceback</a>
  &#8226;   <a href="#types">types</a>
  &#8226;   <a href="#ultralytics">ultralytics</a>
@@ -14486,6 +14490,7 @@ imported by:
  &#8226;   <a href="#dateutil.tz._factories">dateutil.tz._factories</a>
  &#8226;   <a href="#dateutil.tz.tz">dateutil.tz.tz</a>
  &#8226;   <a href="#dateutil.tz.win">dateutil.tz.win</a>
+ &#8226;   <a href="#db_manager">db_manager</a>
  &#8226;   <a href="#email.utils">email.utils</a>
  &#8226;   <a href="#fsspec.implementations.local">fsspec.implementations.local</a>
  &#8226;   <a href="#fsspec.implementations.memory">fsspec.implementations.memory</a>
@@ -14494,6 +14499,7 @@ imported by:
  &#8226;   <a href="#fsspec.implementations.webhdfs">fsspec.implementations.webhdfs</a>
  &#8226;   <a href="#http.cookiejar">http.cookiejar</a>
  &#8226;   <a href="#http.server">http.server</a>
+ &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#matplotlib.axis">matplotlib.axis</a>
  &#8226;   <a href="#matplotlib.backends.backend_webagg_core">matplotlib.backends.backend_webagg_core</a>
  &#8226;   <a href="#matplotlib.dates">matplotlib.dates</a>
@@ -15034,6 +15040,25 @@ imports:
   <div class="import">
 imported by:
     <a href="#dateutil.tz.tz">dateutil.tz.tz</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="db_manager"></a>
+  <a target="code" href="///E:/Parking_Detect/db_manager.py" type="text/plain"><tt>db_manager</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#datetime">datetime</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#sqlite3">sqlite3</a>
+ &#8226;   <a href="#uuid">uuid</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
 
   </div>
 
@@ -26052,6 +26077,7 @@ imported by:
  &#8226;   <a href="#json.decoder">json.decoder</a>
  &#8226;   <a href="#json.encoder">json.encoder</a>
  &#8226;   <a href="#json.scanner">json.scanner</a>
+ &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#matplotlib.backends.backend_webagg">matplotlib.backends.backend_webagg</a>
  &#8226;   <a href="#matplotlib.backends.backend_webagg_core">matplotlib.backends.backend_webagg_core</a>
  &#8226;   <a href="#matplotlib.font_manager">matplotlib.font_manager</a>
@@ -48596,6 +48622,7 @@ imported by:
  &#8226;   <a href="#cv2.data">cv2.data</a>
  &#8226;   <a href="#cv2.load_config_py3">cv2.load_config_py3</a>
  &#8226;   <a href="#dateutil.tz.tz">dateutil.tz.tz</a>
+ &#8226;   <a href="#db_manager">db_manager</a>
  &#8226;   <a href="#doctest">doctest</a>
  &#8226;   <a href="#email.utils">email.utils</a>
  &#8226;   <a href="#fileinput">fileinput</a>
@@ -92411,7 +92438,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#pandas.io.sql">pandas.io.sql</a>
+    <a href="#db_manager">db_manager</a>
+ &#8226;   <a href="#pandas.io.sql">pandas.io.sql</a>
  &#8226;   <a href="#sqlite3">sqlite3</a>
  &#8226;   <a href="#sqlite3.__main__">sqlite3.__main__</a>
  &#8226;   <a href="#sqlite3.dbapi2">sqlite3.dbapi2</a>
@@ -115136,7 +115164,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#tkinter.filedialog">tkinter.filedialog</a>
+    <a href="#main.py">main.py</a>
+ &#8226;   <a href="#tkinter.filedialog">tkinter.filedialog</a>
 
   </div>
 
@@ -196777,7 +196806,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#fsspec.generic">fsspec.generic</a>
+    <a href="#db_manager">db_manager</a>
+ &#8226;   <a href="#fsspec.generic">fsspec.generic</a>
  &#8226;   <a href="#fsspec.implementations.ftp">fsspec.implementations.ftp</a>
  &#8226;   <a href="#fsspec.implementations.sftp">fsspec.implementations.sftp</a>
  &#8226;   <a href="#fsspec.implementations.smb">fsspec.implementations.smb</a>
