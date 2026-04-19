@@ -218,7 +218,7 @@ class DetectionWorker(QObject):
         
     def run(self):
         try:
-            model = YOLO('yolov8n.pt')
+            model = YOLO('yolov8m.pt')
         except Exception as e:
             self.on_error.emit(f"Gặp sự cố khi khởi tạo model YOLO: {e}")
             return
@@ -658,6 +658,11 @@ class ParkingAppUI(QMainWindow):
                 cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
             except:
                 pass
+        else:
+            # Warm-up webcam: Read and discard ~20 frames 
+            # to let DroidCam connect and auto-exposure settle
+            for _ in range(20):
+                cap.read()
                 
         ret, frame = cap.read()
         if not ret:
@@ -806,14 +811,48 @@ class ParkingAppUI(QMainWindow):
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl)
         
+        self.lbl_checkin_status = QLabel()
+        layout.addWidget(self.lbl_checkin_status)
+        
+        self.sa_checkin = QScrollArea()
+        self.sa_checkin.setWidgetResizable(True)
+        layout.addWidget(self.sa_checkin)
+        
+        self.lbl_checkin_action = QLabel()
+        self.lbl_checkin_action.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.lbl_checkin_action)
+        
+        def on_close():
+            dialog.accept()
+            try:
+                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 1)
+                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 0)
+            except: pass
+
+        btn = QPushButton("Đóng")
+        btn.clicked.connect(on_close)
+        layout.addWidget(btn)
+        
+        self.timer_checkin = QTimer(dialog)
+        self.timer_checkin.timeout.connect(self._refresh_checkin)
+        self.timer_checkin.start(1000)
+        
+        self._checkin_dialog = dialog
+        self._refresh_checkin()
+        self.fade_in(dialog)
+        dialog.show()
+
+    def _refresh_checkin(self):
+        status = self.last_poly_status
+        if getattr(self, '_checkin_dialog', None) is None or not self._checkin_dialog.isVisible() or not status:
+            return
+            
         empty_slots = [i+1 for i, occ in enumerate(status) if not occ]
         occ_slots = [i+1 for i, occ in enumerate(status) if occ]
         tot = len(status)
         
-        layout.addWidget(QLabel(f"Trống: {len(empty_slots)}/{tot}   |   Đã đỗ: {len(occ_slots)}/{tot}"))
+        self.lbl_checkin_status.setText(f"Trống: {len(empty_slots)}/{tot}   |   Đã đỗ: {len(occ_slots)}/{tot}")
         
-        sa = QScrollArea()
-        sa.setWidgetResizable(True)
         w = QWidget()
         wl = QVBoxLayout(w)
         
@@ -838,8 +877,7 @@ class ParkingAppUI(QMainWindow):
             wl.addWidget(f)
             
         wl.addStretch()
-        sa.setWidget(w)
-        layout.addWidget(sa)
+        self.sa_checkin.setWidget(w)
         
         if empty_slots:
             g = f"✅ Vui lòng tiến vào Ô {empty_slots[0]}."
@@ -848,25 +886,8 @@ class ParkingAppUI(QMainWindow):
             g = "⛔ Bãi đỗ đã đầy."
             c = "#e74c3c"
             
-        glbl = QLabel(g)
-        glbl.setStyleSheet(f"color: {c}; font-weight: bold; font-size: 14px;")
-        glbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(glbl)
-        
-        def on_close():
-            dialog.accept()
-            try:
-                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 1)
-                cv2.setWindowProperty("Video Detection", cv2.WND_PROP_TOPMOST, 0)
-            except: pass
-
-        btn = QPushButton("Đóng")
-        btn.clicked.connect(on_close)
-        layout.addWidget(btn)
-        
-        self._checkin_dialog = dialog
-        self.fade_in(dialog)
-        dialog.show()
+        self.lbl_checkin_action.setText(g)
+        self.lbl_checkin_action.setStyleSheet(f"color: {c}; font-weight: bold; font-size: 14px;")
 
     def show_dashboard(self):
         self.dash = QDialog()
