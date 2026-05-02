@@ -1,6 +1,6 @@
-# Phần Mềm Quản Lý Bãi Đỗ Xe (Parking Detect)
+### **English below**
 
-*English below*
+# Phần Mềm Quản Lý Bãi Đỗ Xe (Parking Detect)
 
 Phần mềm hỗ trợ nhận diện và quản lý chỗ trống trong bãi đỗ xe tự động sử dụng mô hình AI (YOLOv8).
 
