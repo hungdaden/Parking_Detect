@@ -202,6 +202,23 @@ QHeaderView::section {
 }
 """
 
+# ================= TITLE BAR THEME =================
+def set_titlebar_theme(window, is_dark):
+    if sys.platform != "win32":
+        return
+    try:
+        from ctypes.wintypes import HWND, DWORD
+        import ctypes
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        hwnd = HWND(int(window.winId()))
+        value = DWORD(1 if is_dark else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value))
+        
+        DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, ctypes.byref(value), ctypes.sizeof(value))
+    except Exception as e:
+        pass
+
 # ================= THREADING =================
 
 class DetectionWorker(QObject):
@@ -495,6 +512,12 @@ class ParkingAppUI(QMainWindow):
     def apply_theme(self):
         theme = DARK_THEME if self.is_dark_mode else LIGHT_THEME
         self.setStyleSheet(theme)
+        
+        # Áp dụng màu titlebar cho toàn bộ các cửa sổ/dialog đang mở
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, (QMainWindow, QDialog)):
+                set_titlebar_theme(widget, self.is_dark_mode)
+                
         if hasattr(self, 'dash') and self.dash.isVisible():
             self.dash.setStyleSheet(theme)
         if hasattr(self, '_checkin_dialog') and self._checkin_dialog.isVisible():
@@ -544,6 +567,7 @@ class ParkingAppUI(QMainWindow):
                 btn.clicked.connect(lambda checked, idx=cam_idx: self.set_webcam(idx, dialog))
                 layout.addWidget(btn)
                 
+        set_titlebar_theme(dialog, self.is_dark_mode)
         self.fade_in(dialog)
         dialog.exec()
         
@@ -633,6 +657,7 @@ class ParkingAppUI(QMainWindow):
         btn_draw.clicked.connect(on_draw)
         btn_del.clicked.connect(on_del)
         
+        set_titlebar_theme(dialog, self.is_dark_mode)
         self.fade_in(dialog)
         dialog.exec()
         
@@ -756,6 +781,7 @@ class ParkingAppUI(QMainWindow):
             dialog.accept()
             
         btn_save.clicked.connect(on_save)
+        set_titlebar_theme(dialog, self.is_dark_mode)
         self.fade_in(dialog)
         dialog.exec()
         
@@ -841,6 +867,7 @@ class ParkingAppUI(QMainWindow):
         
         self._checkin_dialog = dialog
         self._refresh_checkin()
+        set_titlebar_theme(dialog, self.is_dark_mode)
         self.fade_in(dialog)
         dialog.show()
 
@@ -943,6 +970,7 @@ class ParkingAppUI(QMainWindow):
         self.timer.start(1500)
         
         self._refresh_dashboard()
+        set_titlebar_theme(self.dash, self.is_dark_mode)
         self.fade_in(self.dash)
         self.dash.show()
         
