@@ -4,6 +4,7 @@ import time
 import os
 import json
 import sys
+import ctypes
 from datetime import datetime
 
 from ultralytics import YOLO
@@ -218,7 +219,7 @@ class DetectionWorker(QObject):
         
     def run(self):
         try:
-            model = YOLO('yolov8m.pt')
+            model = YOLO(resource_path('yolov8m.pt'))
         except Exception as e:
             self.on_error.emit(f"Gặp sự cố khi khởi tạo model YOLO: {e}")
             return
@@ -375,11 +376,12 @@ class ParkingAppUI(QMainWindow):
         self.last_poly_status = []
         self.prev_poly_status = []
         
-        self.is_dark_mode = False # Default to light mode
+        self.is_dark_mode = False
         
         self.init_ui()
         
     def init_ui(self):
+        self.setWindowIcon(QIcon(resource_path("icon.ico")))
         self.setWindowTitle("Parking Vehicle Detection")
         self.resize(700, 450)
         
@@ -416,7 +418,7 @@ class ParkingAppUI(QMainWindow):
         frame_layout.setContentsMargins(20, 20, 20, 20)
         frame_layout.setSpacing(15)
         
-        lbl_title = QLabel("PARKING DETECTION SETTINGS")
+        lbl_title = QLabel("CÀI ĐẶT CHỨC NĂNG NHẬN DIỆN")
         lbl_title.setObjectName("HeaderLabel")
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         frame_layout.addWidget(lbl_title)
@@ -913,18 +915,21 @@ class ParkingAppUI(QMainWindow):
             l.setStyleSheet("font-size: 14px; font-weight: bold; color: #2980b9;" if not self.is_dark_mode else "font-size: 14px; font-weight: bold; color: #00a8ff;")
             sl.addWidget(l)
             
-        layout.addWidget(QLabel("Thống kê hôm nay"))
+        current_date_str = datetime.now().strftime('%d/%m/%Y')
+        layout.addWidget(QLabel(f"Thống kê hôm nay ({current_date_str})"))
         layout.addWidget(self.f_stats)
         
         # Thống kê theo ô
         layout.addWidget(QLabel("Thống kê theo Ô đỗ"))
         self.table_slot = QTableWidget()
+        self.table_slot.verticalHeader().setVisible(False)
         self.table_slot.setMinimumHeight(150)
         layout.addWidget(self.table_slot)
         
         # Lịch sử
         layout.addWidget(QLabel("Lịch sử gần nhất"))
         self.table_hist = QTableWidget()
+        self.table_hist.verticalHeader().setVisible(False)
         self.table_hist.setMinimumHeight(150)
         layout.addWidget(self.table_hist)
         
@@ -972,32 +977,54 @@ class ParkingAppUI(QMainWindow):
             
             hist = self.db.get_history(15)
             self.table_hist.setRowCount(len(hist))
-            self.table_hist.setColumnCount(4)
-            self.table_hist.setHorizontalHeaderLabels(["Thời gian", "Ô đỗ", "Xe", "Sự kiện"])
+            self.table_hist.setColumnCount(5)
+            self.table_hist.setHorizontalHeaderLabels(["Ngày", "Giờ", "Ô đỗ", "Xe", "Sự kiện"])
             self.table_hist.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            self.table_hist.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
             
             for r, ev in enumerate(hist):
-                ts = ev["timestamp"][11:19] if len(ev["timestamp"])>11 else ""
+                try:
+                    dt = datetime.strptime(ev["timestamp"], "%Y-%m-%d %H:%M:%S")
+                    date_str = dt.strftime("%d/%m")
+                    time_str = dt.strftime("%H:%M:%S")
+                except:
+                    date_str = ""
+                    time_str = ev["timestamp"]
                 txt = "VÀO" if ev["event_type"] == "IN" else "RA"
                 
-                self.table_hist.setItem(r, 0, centered_item(ts))
-                self.table_hist.setItem(r, 1, centered_item(f"Ô {ev['slot_id']}"))
-                self.table_hist.setItem(r, 2, centered_item(ev["vehicle_id"] or ""))
+                self.table_hist.setItem(r, 0, centered_item(date_str))
+                self.table_hist.setItem(r, 1, centered_item(time_str))
+                self.table_hist.setItem(r, 2, centered_item(f"Ô {ev['slot_id']}"))
+                self.table_hist.setItem(r, 3, centered_item(ev["vehicle_id"] or ""))
                 
                 item_event = centered_item(txt)
                 item_event.setForeground(QColor("#27ae60" if ev["event_type"] == "IN" else "#e67e22"))
                 font = item_event.font()
                 font.setBold(True)
                 item_event.setFont(font)
-                self.table_hist.setItem(r, 3, item_event)
+                self.table_hist.setItem(r, 4, item_event)
             
         except Exception as e:
             print("Refresh err", e)
 
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 if __name__ == "__main__":
+    # Fix for Windows Taskbar Icon
+    myappid = 'vtio.parkingdetect.app.1'
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(resource_path("icon.ico")))
     
-    # Enable High DPI scaling
     if hasattr(Qt.ApplicationAttribute, "AA_EnableHighDpiScaling"):
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
     if hasattr(Qt.ApplicationAttribute, "AA_UseHighDpiPixmaps"):

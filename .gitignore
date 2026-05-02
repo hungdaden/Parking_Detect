@@ -1,0 +1,29 @@
+# Biuld folders
+build/
+dist/
+
+# PyInstaller spec files
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual Environments
+venv/
+env/
+.env
+
+# Database and Generated Files
+parking.db
+presets/
+
+# Logs
+*.log
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
