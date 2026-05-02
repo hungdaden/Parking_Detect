@@ -23,8 +23,16 @@ def main():
             except Exception as e:
                 print(f"Warning: Could not fully clean {folder}: {e}")
 
+    # Tự động tìm Python trong môi trường ảo (ưu tiên) để tránh xung đột hệ thống
+    python_exe = sys.executable
+    for venv_dir in [".venv", "venv", "env"]:
+        venv_python = os.path.join(project_dir, venv_dir, "Scripts", "python.exe")
+        if os.path.exists(venv_python):
+            python_exe = venv_python
+            break
+
     cmd = [
-        sys.executable, "-m", "PyInstaller",
+        python_exe, "-m", "PyInstaller",
         "--noconfirm",
         spec_file,
     ]
