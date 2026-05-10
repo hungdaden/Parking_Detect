@@ -39,6 +39,14 @@ class ParkingDB:
                 last_updated TEXT
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS license_plates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plate_text TEXT NOT NULL,
+                plate_image BLOB,
+                timestamp TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
         conn.commit()
         conn.close()
 
@@ -143,3 +151,22 @@ class ParkingDB:
         c.execute("DELETE FROM slot_status")
         conn.commit()
         conn.close()
+
+    def record_license_plate(self, plate_text, plate_image_bytes=None):
+        conn = self._get_conn()
+        c = conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute(
+            "INSERT INTO license_plates (plate_text, plate_image, timestamp) VALUES (?, ?, ?)",
+            (plate_text, plate_image_bytes, now)
+        )
+        conn.commit()
+        conn.close()
+
+    def get_license_plates(self, limit=20):
+        conn = self._get_conn()
+        c = conn.cursor()
+        c.execute("SELECT * FROM license_plates ORDER BY id DESC LIMIT ?", (limit,))
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows

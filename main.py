@@ -5,6 +5,7 @@ import os
 import json
 import sys
 import ctypes
+import concurrent.futures
 from datetime import datetime
 
 from ultralytics import YOLO
@@ -234,6 +235,77 @@ class DetectionWorker(QObject):
         self.screen_h = screen_h
         self._is_running = True
         
+        self.plate_cascade = None
+        self.reader = None
+        self.frame_count = 0
+        self.recent_plates = {}
+        
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.ocr_future = None
+        self.alpr_result_text = ""
+        self.alpr_result_time = 0.0
+        
+    def _process_alpr(self, crop_img):
+        try:
+            if self.reader is None: return
+            result = self.reader.readtext(crop_img) # type: ignore
+            if result:
+                import re
+                # Ghép tất cả các đoạn text quét được (hỗ trợ biển số 2 dòng)
+                # Sắp xếp theo vị trí y (từ trên xuống dưới)
+                result.sort(key=lambda x: x[0][0][1])
+                combined_text = "".join([x[1] for x in result]).upper()
+                
+                # Làm sạch chuỗi
+                raw_text = combined_text.replace("-", "").replace(".", "").replace(" ", "")
+                if len(raw_text) < 7: return
+
+                # Tự động sửa lỗi nhầm lẫn phổ biến giữa Chữ và Số dựa trên vị trí định dạng VN
+                chars = list(raw_text)
+                # Bảng chuyển đổi lỗi OCR hay gặp
+                d_to_c = {'0':'D', '1':'I', '2':'Z', '4':'A', '5':'S', '6':'G', '7':'T', '8':'B'}
+                c_to_d = {'O':'0', 'D':'0', 'I':'1', 'S':'5', 'G':'6', 'B':'8', 'A':'4', 'Z':'2', 'T':'7'}
+
+                # Vị trí 0, 1 luôn là SỐ
+                for i in [0, 1]:
+                    if i < len(chars) and chars[i] in c_to_d: chars[i] = c_to_d[chars[i]]
+                
+                # Vị trí 2 luôn là CHỮ
+                if len(chars) > 2 and chars[2] in d_to_c: chars[2] = d_to_c[chars[2]]
+                
+                # Các vị trí từ 4 hoặc 5 trở đi đến cuối luôn là SỐ
+                # (Chúng ta sẽ xử lý sau khi biết định dạng SSC hay SSCC)
+                processed_text = "".join(chars)
+
+                # Định dạng 1: SSC-SSSSS (vd: 30F-12345)
+                pattern1 = re.compile(r"^(\d{2}[A-Z])(\d{4,5})$")
+                # Định dạng 2: SSCC-SSSSS (vd: 14A1-55797)
+                pattern2 = re.compile(r"^(\d{2}[A-Z][A-Z0-9])(\d{4,5})$")
+
+                match1 = pattern1.match(processed_text)
+                match2 = pattern2.match(processed_text)
+                
+                final_text = ""
+                # Ưu tiên định dạng có 5 chữ số ở cuối (phổ biến hơn cho ô tô và xe máy mới)
+                if match1 and len(match1.group(2)) == 5:
+                    final_text = match1.group(1) + "-" + match1.group(2)
+                elif match2:
+                    final_text = match2.group(1) + "-" + match2.group(2)
+                elif match1:
+                    final_text = match1.group(1) + "-" + match1.group(2)
+                
+                if final_text:
+                    current_time = time.time()
+                    if final_text not in self.recent_plates or (current_time - self.recent_plates.get(final_text, 0) > 60):
+                        self.recent_plates[final_text] = current_time
+                        success, encoded_image = cv2.imencode('.jpg', crop_img)
+                        if success:
+                            self.app.db.record_license_plate(final_text, encoded_image.tobytes())
+                            self.alpr_result_text = final_text
+                            self.alpr_result_time = current_time
+        except Exception as e:
+            print("OCR Error:", e)
+            
     def run(self):
         try:
             model = YOLO(resource_path('yolov8m.pt'))
@@ -302,13 +374,14 @@ class DetectionWorker(QObject):
             car_centers = []
             for r in results:
                 boxes = r.boxes
-                for box in boxes:
-                    x1, y1, x2, y2 = box.xyxy[0]
-                    cx = int((x1 + x2) / 2)
-                    cy = int(y2 - (y2 - y1) * 0.3)
-                    car_centers.append((cx, cy))
-                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (200, 200, 200), 1)
-                    cv2.circle(frame, (cx, cy), 4, (0, 255, 255), -1)
+                if boxes is not None:
+                    for box in boxes:
+                        x1, y1, x2, y2 = box.xyxy[0]
+                        cx = int((x1 + x2) / 2)
+                        cy = int(y2 - (y2 - y1) * 0.3)
+                        car_centers.append((cx, cy))
+                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (200, 200, 200), 1)
+                        cv2.circle(frame, (cx, cy), 4, (0, 255, 255), -1)
                     
             occupied_count = 0
             current_status = []
@@ -349,6 +422,33 @@ class DetectionWorker(QObject):
                         
             self.app.last_poly_status = current_status
             
+            if getattr(self.app, 'alpr_enabled', False):
+                self.frame_count += 1
+                
+                h, w = frame.shape[:2]
+                box_w, box_h = int(w * 0.5), int(h * 0.3)
+                px = int((w - box_w) / 2)
+                py = int((h - box_h) / 2)
+                
+                cv2.rectangle(frame, (px, py), (px + box_w, py + box_h), (0, 255, 0), 2)
+                cv2.putText(frame, "DUA BIEN SO VAO DAY", (px, py - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame, "ALPR: ON", (w - 120, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                if time.time() - getattr(self, 'alpr_result_time', 0) < 3:
+                    cv2.putText(frame, f"Da doc: {self.alpr_result_text}", (px, py + box_h + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                
+                if self.frame_count % 15 == 0:
+                    if self.reader is None:
+                        try:
+                            import easyocr # type: ignore
+                            self.reader = easyocr.Reader(['en'], gpu=True)
+                        except Exception as e:
+                            print("Lỗi khởi tạo ALPR:", e)
+                    
+                    if self.reader is not None and (self.ocr_future is None or self.ocr_future.done()):
+                        plate_crop = frame[py:py+box_h, px:px+box_w].copy()
+                        self.ocr_future = self.executor.submit(self._process_alpr, plate_crop)
+            
             cv2.putText(frame, "'Q' stop | 'I' Check In", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             cv2.putText(frame, f"Trang thai: {occupied_count}/{len(polygons_copy)} cho", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
             
@@ -369,10 +469,12 @@ class DetectionWorker(QObject):
         except:
             pass
             
+        self.executor.shutdown(wait=False)
         self.on_finished.emit()
 
     def stop(self):
         self._is_running = False
+        self.executor.shutdown(wait=False)
 
 
 # ================= MAIN UI =================
@@ -393,6 +495,7 @@ class ParkingAppUI(QMainWindow):
         self.last_poly_status = []
         self.prev_poly_status = []
         
+        self.alpr_enabled = False
         self.is_dark_mode = False
         
         self.init_ui()
@@ -425,6 +528,13 @@ class ParkingAppUI(QMainWindow):
         self.btn_checkin.clicked.connect(self.show_checkin_popup)
         self.btn_checkin.setEnabled(False)
         header_layout.addWidget(self.btn_checkin)
+        
+        self.btn_alpr = QPushButton("📷 Biển số")
+        self.btn_alpr.setCheckable(True)
+        self.btn_alpr.setEnabled(False)
+        self.btn_alpr.setStyleSheet("background-color: #95a5a6; color: white;")
+        self.btn_alpr.toggled.connect(self.toggle_alpr)
+        header_layout.addWidget(self.btn_alpr)
         
         main_layout.addLayout(header_layout)
         
@@ -522,6 +632,13 @@ class ParkingAppUI(QMainWindow):
             self.dash.setStyleSheet(theme)
         if hasattr(self, '_checkin_dialog') and self._checkin_dialog.isVisible():
             self._checkin_dialog.setStyleSheet(theme)
+            
+    def toggle_alpr(self, checked):
+        self.alpr_enabled = checked
+        if checked:
+            self.btn_alpr.setStyleSheet("background-color: #2ecc71; color: white;")
+        else:
+            self.btn_alpr.setStyleSheet("background-color: #95a5a6; color: white;")
         
     def browse_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Chọn Video", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
@@ -553,7 +670,9 @@ class ParkingAppUI(QMainWindow):
                 
         # clear loading
         for i in reversed(range(layout.count())): 
-            layout.itemAt(i).widget().setParent(None)
+            item = layout.itemAt(i)
+            if item is not None and item.widget() is not None:
+                item.widget().setParent(None) # type: ignore
             
         if not available_cameras:
             layout.addWidget(QLabel("Không tìm thấy camera nào."))
@@ -687,7 +806,7 @@ class ParkingAppUI(QMainWindow):
                 pass
         else:
             # Warm-up webcam: Read and discard ~20 frames 
-            # to let DroidCam connect and auto-exposure settle
+            # to let 3th Camera app connect and auto-exposure settle
             for _ in range(20):
                 cap.read()
                 
@@ -797,8 +916,14 @@ class ParkingAppUI(QMainWindow):
             if res == QMessageBox.StandardButton.No:
                 return
             
-        screen = QApplication.primaryScreen().geometry()
-        self.worker = DetectionWorker(self, screen.width(), screen.height())
+        primary = QApplication.primaryScreen()
+        if primary is not None:
+            screen = primary.geometry()
+            w, h = screen.width(), screen.height()
+        else:
+            w, h = 1920, 1080
+            
+        self.worker = DetectionWorker(self, w, h)
         self.worker.on_error.connect(lambda e: QMessageBox.critical(self, "Lỗi", e))
         self.worker.show_checkin_signal.connect(self.show_checkin_popup)
         self.worker.on_finished.connect(self._on_detection_finished)
@@ -807,6 +932,7 @@ class ParkingAppUI(QMainWindow):
         self.btn_detect.setText("ĐANG CHẠY...")
         self.btn_detect.setEnabled(False)
         self.btn_checkin.setEnabled(self.is_webcam)
+        self.btn_alpr.setEnabled(self.is_webcam)
         
         # Use python threading to avoid Qt Event Loop deadlock with cv2 UI functions
         t = threading.Thread(target=self.worker.run, daemon=True)
@@ -817,6 +943,8 @@ class ParkingAppUI(QMainWindow):
         self.btn_detect.setText("BẮT ĐẦU NHẬN DIỆN")
         self.btn_detect.setEnabled(True)
         self.btn_checkin.setEnabled(False)
+        self.btn_alpr.setChecked(False)
+        self.btn_alpr.setEnabled(False)
         
     def show_checkin_popup(self):
         if not self.detection_active or not self.is_webcam:
@@ -949,16 +1077,26 @@ class ParkingAppUI(QMainWindow):
         # Thống kê theo ô
         layout.addWidget(QLabel("Thống kê theo Ô đỗ"))
         self.table_slot = QTableWidget()
-        self.table_slot.verticalHeader().setVisible(False)
+        if self.table_slot.verticalHeader() is not None:
+            self.table_slot.verticalHeader().setVisible(False) # type: ignore
         self.table_slot.setMinimumHeight(150)
         layout.addWidget(self.table_slot)
         
         # Lịch sử
         layout.addWidget(QLabel("Lịch sử gần nhất"))
         self.table_hist = QTableWidget()
-        self.table_hist.verticalHeader().setVisible(False)
+        if self.table_hist.verticalHeader() is not None:
+            self.table_hist.verticalHeader().setVisible(False) # type: ignore
         self.table_hist.setMinimumHeight(150)
         layout.addWidget(self.table_hist)
+        
+        # Lịch sử biển số
+        layout.addWidget(QLabel("Lịch sử Biển số"))
+        self.table_plates = QTableWidget()
+        if self.table_plates.verticalHeader() is not None:
+            self.table_plates.verticalHeader().setVisible(False) # type: ignore
+        self.table_plates.setMinimumHeight(150)
+        layout.addWidget(self.table_plates)
         
         btn_clear = QPushButton("🗑️ Xóa Báo Cáo")
         btn_clear.setObjectName("DangerBtn")
@@ -996,7 +1134,8 @@ class ParkingAppUI(QMainWindow):
             self.table_slot.setRowCount(len(summary))
             self.table_slot.setColumnCount(3)
             self.table_slot.setHorizontalHeaderLabels(["Ô đỗ", "Lượt vào", "Lượt ra"])
-            self.table_slot.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            if self.table_slot.horizontalHeader() is not None:
+                self.table_slot.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch) # type: ignore
             
             for r, row in enumerate(summary):
                 self.table_slot.setItem(r, 0, centered_item(f"Ô {row['slot_id']}"))
@@ -1007,8 +1146,9 @@ class ParkingAppUI(QMainWindow):
             self.table_hist.setRowCount(len(hist))
             self.table_hist.setColumnCount(5)
             self.table_hist.setHorizontalHeaderLabels(["Ngày", "Giờ", "Ô đỗ", "Xe", "Sự kiện"])
-            self.table_hist.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-            self.table_hist.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            if self.table_hist.horizontalHeader() is not None:
+                self.table_hist.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch) # type: ignore
+                self.table_hist.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents) # type: ignore
             
             for r, ev in enumerate(hist):
                 try:
@@ -1031,13 +1171,43 @@ class ParkingAppUI(QMainWindow):
                 font.setBold(True)
                 item_event.setFont(font)
                 self.table_hist.setItem(r, 4, item_event)
+                
+            plates = self.db.get_license_plates(10)
+            self.table_plates.setRowCount(len(plates))
+            self.table_plates.setColumnCount(3)
+            self.table_plates.setHorizontalHeaderLabels(["Ngày Giờ", "Biển số", "Hình ảnh"])
+            if self.table_plates.horizontalHeader() is not None:
+                self.table_plates.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch) # type: ignore
+            if self.table_plates.verticalHeader() is not None:
+                self.table_plates.verticalHeader().setDefaultSectionSize(60) # type: ignore
+            
+            from PyQt6.QtGui import QPixmap, QImage
+            for r, p in enumerate(plates):
+                self.table_plates.setItem(r, 0, centered_item(p["timestamp"]))
+                
+                txt_item = centered_item(p["plate_text"])
+                txt_item.setForeground(QColor("#00a8ff" if self.is_dark_mode else "#2980b9"))
+                font = txt_item.font()
+                font.setBold(True)
+                txt_item.setFont(font)
+                self.table_plates.setItem(r, 1, txt_item)
+                
+                if p["plate_image"]:
+                    img_data = p["plate_image"]
+                    qimg = QImage.fromData(img_data)
+                    pixmap = QPixmap.fromImage(qimg).scaled(100, 50, Qt.AspectRatioMode.KeepAspectRatio)
+                    lbl_img = QLabel()
+                    lbl_img.setPixmap(pixmap)
+                    lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.table_plates.setCellWidget(r, 2, lbl_img)
+            
             
         except Exception as e:
             print("Refresh err", e)
 
 def resource_path(relative_path):
     try:
-        base_path = sys._MEIPASS
+        base_path = sys._MEIPASS # type: ignore
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
