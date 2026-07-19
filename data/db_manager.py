@@ -148,8 +148,10 @@ class ParkingDB:
         c = conn.cursor()
         c.execute("DELETE FROM parking_events")
         c.execute("DELETE FROM slot_status")
+        c.execute("DELETE FROM license_plates")
         conn.commit()
         conn.close()
+
 
     def record_license_plate(self, plate_text, plate_image_bytes=None):
         conn = self._get_conn()
@@ -169,3 +171,93 @@ class ParkingDB:
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
         return rows
+
+    def _build_where_clause(self, start_dt=None, end_dt=None, start_time=None, end_time=None):
+        where_clauses = []
+        params = []
+
+        if start_dt:
+            where_clauses.append("timestamp >= ?")
+            params.append(start_dt)
+        if end_dt:
+            where_clauses.append("timestamp <= ?")
+            params.append(end_dt)
+
+        if start_time:
+            if len(start_time) == 5:
+                start_time += ":00"
+            where_clauses.append("strftime('%H:%M:%S', timestamp) >= ?")
+            params.append(start_time)
+
+        if end_time:
+            if len(end_time) == 5:
+                end_time += ":59"
+            where_clauses.append("strftime('%H:%M:%S', timestamp) <= ?")
+            params.append(end_time)
+
+        where_str = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        return where_str, params
+
+    def get_filtered_events(self, start_dt=None, end_dt=None, start_time=None, end_time=None):
+        conn = self._get_conn()
+        c = conn.cursor()
+        where_str, params = self._build_where_clause(start_dt, end_dt, start_time, end_time)
+        query = f"SELECT * FROM parking_events{where_str} ORDER BY id ASC"
+        c.execute(query, params)
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows
+
+    def get_filtered_license_plates(self, start_dt=None, end_dt=None, start_time=None, end_time=None):
+        conn = self._get_conn()
+        c = conn.cursor()
+        where_str, params = self._build_where_clause(start_dt, end_dt, start_time, end_time)
+        query = f"SELECT * FROM license_plates{where_str} ORDER BY id ASC"
+        c.execute(query, params)
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows
+
+    def get_filtered_slot_summary(self, start_dt=None, end_dt=None, start_time=None, end_time=None):
+        conn = self._get_conn()
+        c = conn.cursor()
+        where_str, params = self._build_where_clause(start_dt, end_dt, start_time, end_time)
+        query = f"""
+            SELECT slot_id, 
+                   SUM(CASE WHEN event_type='IN' THEN 1 ELSE 0 END) as total_in,
+                   SUM(CASE WHEN event_type='OUT' THEN 1 ELSE 0 END) as total_out
+            FROM parking_events
+            {where_str}
+            GROUP BY slot_id
+            ORDER BY slot_id
+        """
+        c.execute(query, params)
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows
+
+    def get_filtered_stats(self, start_dt=None, end_dt=None, start_time=None, end_time=None):
+        conn = self._get_conn()
+        c = conn.cursor()
+        where_str, params = self._build_where_clause(start_dt, end_dt, start_time, end_time)
+        
+        # Where clause with event_type condition
+        if where_str:
+            where_in = where_str + " AND event_type='IN'"
+            where_out = where_str + " AND event_type='OUT'"
+        else:
+            where_in = " WHERE event_type='IN'"
+            where_out = " WHERE event_type='OUT'"
+
+        c.execute(f"SELECT COUNT(*) as cnt FROM parking_events{where_in}", params)
+        total_in = c.fetchone()["cnt"]
+
+        c.execute(f"SELECT COUNT(*) as cnt FROM parking_events{where_out}", params)
+        total_out = c.fetchone()["cnt"]
+
+        conn.close()
+        return {
+            "total_in": total_in,
+            "total_out": total_out
+        }
+

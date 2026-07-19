@@ -22,8 +22,10 @@ from ui.dialogs import (
     choose_webcam_dialog,
     show_save_preset_dialog,
     show_checkin_guidance_dialog,
-    execute_draw_window
+    execute_draw_window,
+    show_export_dialog
 )
+
 
 
 class ParkingAppUI(QMainWindow):
@@ -500,14 +502,25 @@ class ParkingAppUI(QMainWindow):
         layout.addWidget(self.table_plates)
 
         h_bar = QHBoxLayout()
+        btn_export = QPushButton("📊 Xuất Excel Báo Cáo")
+        btn_export.setObjectName("SuccessBtn")
+        btn_export.setMinimumHeight(36)
+        btn_export.clicked.connect(self._open_export_dialog)
+        h_bar.addWidget(btn_export)
+
         btn_clear = QPushButton("🗑️ Xóa Dữ Liệu Báo Cáo")
         btn_clear.setObjectName("DangerBtn")
+        btn_clear.setMinimumHeight(36)
         btn_clear.clicked.connect(self._clear_dashboard)
         h_bar.addWidget(btn_clear)
+
         h_bar.addStretch()
         layout.addLayout(h_bar)
 
         return page
+
+    def _open_export_dialog(self):
+        show_export_dialog(self)
 
     def _create_page_settings(self):
         page = QWidget()
