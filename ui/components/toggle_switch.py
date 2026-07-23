@@ -11,14 +11,14 @@ class ToggleSwitch(QCheckBox):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(54, 28)
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+    def mousePressEvent(self, e):
+        if e is not None and e.button() == Qt.MouseButton.LeftButton:
             self.toggle()
-            event.accept()
+            e.accept()
         else:
-            super().mousePressEvent(event)
+            super().mousePressEvent(e)
 
-    def paintEvent(self, event):
+    def paintEvent(self, a0):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 

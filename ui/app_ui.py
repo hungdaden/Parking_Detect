@@ -1,4 +1,3 @@
-import os
 import threading
 from datetime import datetime
 
@@ -20,7 +19,6 @@ from ui.components.toggle_switch import ToggleSwitch
 from ui.components.hover_sidebar import HoverSidebarFrame
 from ui.dialogs import (
     choose_webcam_dialog,
-    show_save_preset_dialog,
     show_checkin_guidance_dialog,
     execute_draw_window,
     show_export_dialog
@@ -56,6 +54,12 @@ class ParkingAppUI(QMainWindow):
         self.preload_alpr()
 
         self.init_ui()
+
+    def _repolish(self, widget):
+        style = widget.style()
+        if style is not None:
+            style.unpolish(widget)
+            style.polish(widget)
 
     def preload_alpr(self):
         def _preload():
@@ -706,8 +710,7 @@ class ParkingAppUI(QMainWindow):
         else:
             self.btn_alpr.setText("📷 ALPR: TẮT")
             self.btn_alpr.setObjectName("SecondaryBtn")
-        self.btn_alpr.style().unpolish(self.btn_alpr)
-        self.btn_alpr.style().polish(self.btn_alpr)
+        self._repolish(self.btn_alpr)
 
     def browse_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Chọn Video", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
@@ -795,10 +798,8 @@ class ParkingAppUI(QMainWindow):
         self.btn_detect.setObjectName("DangerBtn")
         self.btn_header_detect.setText("🛑 DỪNG NHẬN DIỆN")
         self.btn_header_detect.setObjectName("DangerBtn")
-        self.btn_detect.style().unpolish(self.btn_detect)
-        self.btn_detect.style().polish(self.btn_detect)
-        self.btn_header_detect.style().unpolish(self.btn_header_detect)
-        self.btn_header_detect.style().polish(self.btn_header_detect)
+        self._repolish(self.btn_detect)
+        self._repolish(self.btn_header_detect)
         self.btn_alpr.setEnabled(True)
 
         # Switch to Live Video & Slot Status Page (Page 1)
@@ -817,10 +818,8 @@ class ParkingAppUI(QMainWindow):
         self.btn_detect.setObjectName("SuccessBtn")
         self.btn_header_detect.setText("⚡ BẮT ĐẦU NHẬN DIỆN")
         self.btn_header_detect.setObjectName("SuccessBtn")
-        self.btn_detect.style().unpolish(self.btn_detect)
-        self.btn_detect.style().polish(self.btn_detect)
-        self.btn_header_detect.style().unpolish(self.btn_header_detect)
-        self.btn_header_detect.style().polish(self.btn_header_detect)
+        self._repolish(self.btn_detect)
+        self._repolish(self.btn_header_detect)
         self.btn_alpr.setChecked(False)
 
         if hasattr(self, 'lbl_video_display'):

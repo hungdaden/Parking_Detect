@@ -52,5 +52,5 @@ def generate_guidance_map_pixmap(slot_id, polygons, last_poly_status, last_raw_f
 
     rgb_frame = cv2.cvtColor(base_frame, cv2.COLOR_BGR2RGB)
     fh, fw, fch = rgb_frame.shape
-    qimg = QImage(rgb_frame.data, fw, fh, fch * fw, QImage.Format.Format_RGB888)
+    qimg = QImage(bytes(rgb_frame.data), fw, fh, fch * fw, QImage.Format.Format_RGB888)
     return QPixmap.fromImage(qimg)

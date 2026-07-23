@@ -20,10 +20,10 @@ class HoverSidebarFrame(QFrame):
         self.setObjectName("SidebarFrame")
         self.setMouseTracking(True)
 
-    def enterEvent(self, a0):
+    def enterEvent(self, event):
         self.leave_timer.stop()
         self.expand_sidebar()
-        super().enterEvent(a0)
+        super().enterEvent(event)
 
     def leaveEvent(self, a0):
         self.leave_timer.start(180)

@@ -52,10 +52,11 @@ class DetectionWorker(QObject):
             if self.reader is None:
                 return
             processed_img = preprocess_license_plate(crop_img)
-            result = self.reader.readtext(processed_img, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')
-            if result:
-                result.sort(key=lambda x: x[0][0][1])
-                combined_text = "".join([x[1] for x in result]).upper()
+            res = self.reader.readtext(processed_img, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+            if res:
+                result_list: list = list(res)
+                result_list.sort(key=lambda x: x[0][0][1])
+                combined_text = "".join([str(x[1]) for x in result_list]).upper()
                 raw_text = combined_text.replace("-", "").replace(".", "").replace(" ", "")
                 if len(raw_text) < 7:
                     return
@@ -269,7 +270,7 @@ class DetectionWorker(QObject):
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 fh, fw, fch = rgb_frame.shape
                 bytes_per_line = fch * fw
-                qimg = QImage(rgb_frame.data, fw, fh, bytes_per_line, QImage.Format.Format_RGB888)
+                qimg = QImage(bytes(rgb_frame.data), fw, fh, bytes_per_line, QImage.Format.Format_RGB888)
                 self.frame_signal.emit(qimg.copy())
 
                 elapsed = int((time.time() - start_time_proc) * 1000)

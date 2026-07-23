@@ -19,9 +19,9 @@ class OptionCard(QFrame):
         self.setObjectName("OptionCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(16, 14, 16, 14)
-        self.layout.setSpacing(8)
+        self.card_layout = QVBoxLayout(self)
+        self.card_layout.setContentsMargins(16, 14, 16, 14)
+        self.card_layout.setSpacing(8)
 
         # Header with Radio button
         self.header_layout = QHBoxLayout()
@@ -36,24 +36,24 @@ class OptionCard(QFrame):
         """)
         self.header_layout.addWidget(self.radio)
         self.header_layout.addStretch()
-        self.layout.addLayout(self.header_layout)
+        self.card_layout.addLayout(self.header_layout)
 
         if description_text:
             self.lbl_desc = QLabel(description_text)
             self.lbl_desc.setObjectName("SubHeaderLabel")
             self.lbl_desc.setWordWrap(True)
-            self.layout.addWidget(self.lbl_desc)
+            self.card_layout.addWidget(self.lbl_desc)
 
         # Content container layout for custom controls
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(10, 6, 0, 4)
         self.content_layout.setSpacing(10)
-        self.layout.addWidget(self.content_widget)
+        self.card_layout.addWidget(self.content_widget)
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, a0):
         self.radio.setChecked(True)
-        super().mousePressEvent(event)
+        super().mousePressEvent(a0)
 
 
 class ExportReportDialog(QDialog):
@@ -376,8 +376,10 @@ class ExportReportDialog(QDialog):
                 btn.setProperty("active", "true")
             else:
                 btn.setProperty("active", "false")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            style = btn.style()
+            if style is not None:
+                style.unpolish(btn)
+                style.polish(btn)
 
     def _on_mode_changed(self):
         is_tod = self.card_tod.radio.isChecked()
@@ -386,8 +388,10 @@ class ExportReportDialog(QDialog):
         # Update card selected visual states
         for card, checked in [(self.card_tod, is_tod), (self.card_all, is_all)]:
             card.setProperty("selected", "true" if checked else "false")
-            card.style().unpolish(card)
-            card.style().polish(card)
+            style = card.style()
+            if style is not None:
+                style.unpolish(card)
+                style.polish(card)
 
         # Enable/Disable input widgets
         self.date_tod_start.setEnabled(is_tod)

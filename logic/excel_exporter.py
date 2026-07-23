@@ -72,9 +72,8 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
     ws_summary.views.sheetView[0].showGridLines = True
 
     # Title Banner
+    title_cell = ws_summary.cell(row=1, column=1, value="⚡ BÁO CÁO THỐNG KÊ HOẠT ĐỘNG BÃI ĐỖ XE")
     ws_summary.merge_cells("A1:E2")
-    title_cell = ws_summary.cell(row=1, column=1)
-    title_cell.value = "⚡ BÁO CÁO THỐNG KÊ HOẠT ĐỘNG BÃI ĐỖ XE"
     title_cell.font = font_title
     title_cell.fill = fill_title
     title_cell.alignment = align_center
@@ -98,50 +97,49 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
     kpi_values = [stats["total_in"], stats["total_out"], len(events)]
 
     for idx, (h, v) in enumerate(zip(kpi_headers, kpi_values), start=1):
-        c_head = ws_summary.cell(row=9, column=idx, value=h)
-        c_head.font = font_header
-        c_head.fill = fill_header
-        c_head.alignment = align_center
+        cell_h = ws_summary.cell(row=8, column=idx, value=h)
+        cell_h.font = font_bold
+        cell_h.fill = fill_kpi
+        cell_h.alignment = align_center
 
-        c_val = ws_summary.cell(row=10, column=idx, value=v)
-        c_val.font = Font(name="Segoe UI", size=14, bold=True, color="4F46E5")
-        c_val.fill = fill_kpi
-        c_val.alignment = align_center
-        c_val.border = border_all
+        cell_v = ws_summary.cell(row=9, column=idx, value=v)
+        cell_v.font = Font(name="Segoe UI", size=14, bold=True, color="4F46E5")
+        cell_v.fill = fill_kpi
+        cell_v.alignment = align_center
 
-    # Slot Summary Table
-    cell_a12 = ws_summary.cell(row=12, column=1, value="🅿️ THỐNG KÊ THEO TỪNG Ô ĐỖ")
+    # Slot Breakdown Table
+    cell_a12 = ws_summary.cell(row=12, column=1, value="🅿️ CHI TIẾT LƯỢT XE THEO TỪNG Ô ĐỖ")
     cell_a12.font = font_section
 
-    slot_table_headers = ["STT", "Vị Trí Ô Đỗ", "Lượt Xe Vào", "Lượt Xe Ra", "Tổng Lượt Hoạt Động"]
-    for col_idx, text in enumerate(slot_table_headers, start=1):
-        cell = ws_summary.cell(row=14, column=col_idx, value=text)
+    headers_slot = ["Mã Ô Đỗ", "Lượt Xe Vào", "Lượt Xe Ra"]
+    for col_idx, h in enumerate(headers_slot, start=1):
+        cell = ws_summary.cell(row=13, column=col_idx, value=h)
         cell.font = font_header
         cell.fill = fill_header
         cell.alignment = align_center
         cell.border = border_all
 
-    row_idx = 15
-    for i, s in enumerate(slot_summary, start=1):
-        total_slot_events = s["total_in"] + s["total_out"]
-        vals = [i, f"Ô {s['slot_id']}", s["total_in"], s["total_out"], total_slot_events]
-        for col_idx, val in enumerate(vals, start=1):
-            cell = ws_summary.cell(row=row_idx, column=col_idx, value=val)
+    start_row = 14
+    for i, s in enumerate(slot_summary):
+        r = start_row + i
+        c1 = ws_summary.cell(row=r, column=1, value=f"Ô đỗ #{s['slot_id']}")
+        c2 = ws_summary.cell(row=r, column=2, value=s['total_in'])
+        c3 = ws_summary.cell(row=r, column=3, value=s['total_out'])
+
+        for cell in [c1, c2, c3]:
             cell.font = font_data
             cell.alignment = align_center
             cell.border = border_all
-            if row_idx % 2 == 0:
+            if i % 2 == 1:
                 cell.fill = fill_zebra
-        ws_summary.row_dimensions[row_idx].height = 20
-        row_idx += 1
 
     if not slot_summary:
-        empty_c = ws_summary.cell(row=15, column=1, value="Không có dữ liệu trong khoảng thời gian này.")
+        empty_c = ws_summary.cell(row=14, column=1, value="Chưa có dữ liệu ô đỗ nào.")
         empty_c.font = font_subtitle
 
     for col in ws_summary.columns:
         max_len = max(len(str(cell.value or '')) for cell in col)
-        col_letter = get_column_letter(col[0].column)
+        col_letter = get_column_letter(col[0].column if col[0].column is not None else 1)
         ws_summary.column_dimensions[col_letter].width = max(max_len + 4, 18)
 
     # ==========================================
@@ -151,9 +149,8 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
     ws_events.views.sheetView[0].showGridLines = True
 
     # Title Banner
+    t_ev = ws_events.cell(row=1, column=1, value="🚗 DANH SÁCH CHI TIẾT LỊCH SỬ XE VÀO / RA BÃI")
     ws_events.merge_cells("A1:F2")
-    t_ev = ws_events.cell(row=1, column=1)
-    t_ev.value = "🚗 DANH SÁCH CHI TIẾT LỊCH SỬ XE VÀO / RA BÃI"
     t_ev.font = font_title
     t_ev.fill = fill_title
     t_ev.alignment = align_center
@@ -194,7 +191,7 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
 
     for col in ws_events.columns:
         max_len = max(len(str(cell.value or '')) for cell in col)
-        col_letter = get_column_letter(col[0].column)
+        col_letter = get_column_letter(col[0].column if col[0].column is not None else 1)
         ws_events.column_dimensions[col_letter].width = max(max_len + 4, 18)
 
     # ==========================================
@@ -204,9 +201,8 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
     ws_plates.views.sheetView[0].showGridLines = True
 
     # Title Banner
+    t_pl = ws_plates.cell(row=1, column=1, value="🔍 NGÀY GIỜ VÀ KẾT QUẢ NHẬN DIỆN BIỂN SỐ XE (ALPR)")
     ws_plates.merge_cells("A1:D2")
-    t_pl = ws_plates.cell(row=1, column=1)
-    t_pl.value = "🔍 NGÀY GIỜ VÀ KẾT QUẢ NHẬN DIỆN BIỂN SỐ XE (ALPR)"
     t_pl.font = font_title
     t_pl.fill = fill_title
     t_pl.alignment = align_center
@@ -237,7 +233,7 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
                 cell.fill = fill_zebra
 
         # Column 4: License Plate Image Embedding
-        cell_img = ws_plates.cell(row=r, column=4)
+        cell_img: Any = ws_plates.cell(row=r, column=4)
         cell_img.border = border_all
         if r % 2 == 0:
             cell_img.fill = fill_zebra
