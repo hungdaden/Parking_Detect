@@ -49,23 +49,30 @@ QFrame#CardFrame {
     border: 1px solid #E2E8F0;
     border-radius: 12px;
 }
+QLabel {
+    background-color: transparent;
+}
 QLabel#BrandTitle {
     font-size: 16px;
     font-weight: bold;
     color: #0F172A;
+    background-color: transparent;
 }
 QLabel#BrandSubtitle {
     font-size: 11px;
     color: #64748B;
+    background-color: transparent;
 }
 QLabel#HeaderLabel {
     font-size: 16px;
     font-weight: bold;
     color: #0F172A;
+    background-color: transparent;
 }
 QLabel#SubHeaderLabel {
     font-size: 12px;
     color: #64748B;
+    background-color: transparent;
 }
 QPushButton#NavBtn {
     background-color: transparent;
@@ -179,6 +186,29 @@ QScrollArea {
     border: none;
     background-color: transparent;
 }
+QScrollBar:vertical {
+    border: none;
+    background: transparent;
+    width: 0px;
+    margin: 0px;
+}
+QScrollBar:horizontal {
+    border: none;
+    background: transparent;
+    height: 0px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+    background: transparent;
+    min-height: 0px;
+    min-width: 0px;
+}
+QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {
+    border: none;
+    background: transparent;
+    width: 0px;
+    height: 0px;
+}
 """
 
 DARK_THEME = """
@@ -204,23 +234,30 @@ QFrame#CardFrame {
     border: 1px solid #2C2E43;
     border-radius: 12px;
 }
+QLabel {
+    background-color: transparent;
+}
 QLabel#BrandTitle {
     font-size: 16px;
     font-weight: bold;
     color: #F8FAFC;
+    background-color: transparent;
 }
 QLabel#BrandSubtitle {
     font-size: 11px;
     color: #94A3B8;
+    background-color: transparent;
 }
 QLabel#HeaderLabel {
     font-size: 16px;
     font-weight: bold;
     color: #F8FAFC;
+    background-color: transparent;
 }
 QLabel#SubHeaderLabel {
     font-size: 12px;
     color: #94A3B8;
+    background-color: transparent;
 }
 QPushButton#NavBtn {
     background-color: transparent;
@@ -335,5 +372,28 @@ QHeaderView::section {
 QScrollArea {
     border: none;
     background-color: transparent;
+}
+QScrollBar:vertical {
+    border: none;
+    background: transparent;
+    width: 0px;
+    margin: 0px;
+}
+QScrollBar:horizontal {
+    border: none;
+    background: transparent;
+    height: 0px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+    background: transparent;
+    min-height: 0px;
+    min-width: 0px;
+}
+QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {
+    border: none;
+    background: transparent;
+    width: 0px;
+    height: 0px;
 }
 """

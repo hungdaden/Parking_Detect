@@ -185,8 +185,10 @@ class DetectionWorker(QObject):
                         cx = int((x1 + x2) / 2)
                         cy = int(y2 - (y2 - y1) * 0.3)
                         car_centers.append((cx, cy))
-                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (200, 200, 200), 1)
-                        cv2.circle(frame, (cx, cy), 4, (0, 255, 255), -1)
+                        if getattr(self.app, 'show_vehicle_bbox', True):
+                            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (200, 200, 200), 1)
+                        if getattr(self.app, 'show_vehicle_center', True):
+                            cv2.circle(frame, (cx, cy), 4, (0, 255, 255), -1)
 
             occupied_count = 0
             current_status = []
@@ -208,7 +210,8 @@ class DetectionWorker(QObject):
                 else:
                     cv2.polylines(frame, [poly_np], True, (0, 255, 0), 3)
 
-                cv2.putText(frame, str(idx + 1), (pcx - 8, pcy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                if getattr(self.app, 'show_slot_numbers', True):
+                    cv2.putText(frame, str(idx + 1), (pcx - 8, pcy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             if len(current_status) == len(confirmed_status):
                 for idx in range(len(current_status)):

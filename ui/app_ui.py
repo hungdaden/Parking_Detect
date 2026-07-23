@@ -1,3 +1,6 @@
+import os
+import json
+import shutil
 import threading
 from datetime import datetime
 
@@ -42,6 +45,9 @@ class ParkingAppUI(QMainWindow):
 
         self.detection_active = False
         self.show_video_embedded = True  # Default: Embedded inside App UI
+        self.show_slot_numbers = True    # Default: Show slot numbers
+        self.show_vehicle_bbox = True    # Default: Show vehicle bounding boxes
+        self.show_vehicle_center = True  # Default: Show vehicle center dots
 
         self.last_poly_status = []
         self.prev_poly_status = []
@@ -91,7 +97,7 @@ class ParkingAppUI(QMainWindow):
         main_layout.addWidget(workspace_widget)
 
         # ================= HOVER DOCKED SIDEBAR OVERLAY =================
-        self.sidebar_frame = HoverSidebarFrame(central, collapsed_width=70, expanded_width=230)
+        self.sidebar_frame = HoverSidebarFrame(central, collapsed_width=69, expanded_width=230)
         shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
         shadow.setBlurRadius(20)
         shadow.setXOffset(4)
@@ -311,15 +317,18 @@ class ParkingAppUI(QMainWindow):
         card_layout.addWidget(QLabel("Preset Khoanh Vùng Ô Đỗ:"))
 
         preset_layout = QHBoxLayout()
-        self.list_presets = QListWidget()
-        self.list_presets.setMaximumHeight(120)
-        self.refresh_preset_list()
-        preset_layout.addWidget(self.list_presets)
+        preset_layout.setSpacing(15)
 
         preset_actions = QVBoxLayout()
+        preset_actions.setSpacing(8)
+
         btn_load_p = QPushButton("📥 Tải Preset")
         btn_load_p.setObjectName("SecondaryBtn")
         btn_load_p.clicked.connect(self.on_load_selected_preset)
+
+        btn_browse_p = QPushButton("📁 Chọn Từ Máy")
+        btn_browse_p.setObjectName("SecondaryBtn")
+        btn_browse_p.clicked.connect(self.browse_preset_file)
 
         btn_draw_new = QPushButton("✏️ Vẽ Vùng Mới")
         btn_draw_new.clicked.connect(self.start_draw_regions)
@@ -329,10 +338,17 @@ class ParkingAppUI(QMainWindow):
         btn_del_p.clicked.connect(self.on_delete_selected_preset)
 
         preset_actions.addWidget(btn_load_p)
+        preset_actions.addWidget(btn_browse_p)
         preset_actions.addWidget(btn_draw_new)
         preset_actions.addWidget(btn_del_p)
-        preset_actions.addStretch()
 
+        self.list_presets = QListWidget()
+        self.list_presets.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list_presets.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list_presets.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self.refresh_preset_list()
+
+        preset_layout.addWidget(self.list_presets)
         preset_layout.addLayout(preset_actions)
         card_layout.addLayout(preset_layout)
 
@@ -413,6 +429,8 @@ class ParkingAppUI(QMainWindow):
         r_layout.addWidget(QLabel("Chi Tiết Tình Trạng Ô Đỗ:"))
         self.sa_status_page = QScrollArea()
         self.sa_status_page.setWidgetResizable(True)
+        self.sa_status_page.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sa_status_page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         r_layout.addWidget(self.sa_status_page)
 
         layout.addWidget(r_card, stretch=2)
@@ -454,6 +472,8 @@ class ParkingAppUI(QMainWindow):
         layout.addWidget(QLabel("Danh Sách Tình Trạng Các Ô Đỗ Trong Bãi:"))
         self.sa_checkin_page = QScrollArea()
         self.sa_checkin_page.setWidgetResizable(True)
+        self.sa_checkin_page.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sa_checkin_page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         layout.addWidget(self.sa_checkin_page)
 
         return page
@@ -483,6 +503,8 @@ class ParkingAppUI(QMainWindow):
         box1 = QVBoxLayout()
         box1.addWidget(QLabel("Thống Kê Theo Ô Đỗ"))
         self.table_slot = QTableWidget()
+        self.table_slot.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table_slot.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         if self.table_slot.verticalHeader() is not None:
             self.table_slot.verticalHeader().setVisible(False)  # type: ignore
         box1.addWidget(self.table_slot)
@@ -491,6 +513,8 @@ class ParkingAppUI(QMainWindow):
         box2 = QVBoxLayout()
         box2.addWidget(QLabel("Lịch Sử Sự Kiện Gần Nhất"))
         self.table_hist = QTableWidget()
+        self.table_hist.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table_hist.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         if self.table_hist.verticalHeader() is not None:
             self.table_hist.verticalHeader().setVisible(False)  # type: ignore
         box2.addWidget(self.table_hist)
@@ -500,6 +524,8 @@ class ParkingAppUI(QMainWindow):
 
         layout.addWidget(QLabel("Lịch Sử Quét Biển Số (ALPR)"))
         self.table_plates = QTableWidget()
+        self.table_plates.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table_plates.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         if self.table_plates.verticalHeader() is not None:
             self.table_plates.verticalHeader().setVisible(False)  # type: ignore
         self.table_plates.setMinimumHeight(140)
@@ -528,7 +554,19 @@ class ParkingAppUI(QMainWindow):
 
     def _create_page_settings(self):
         page = QWidget()
-        layout = QVBoxLayout(page)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(scroll_content)
         layout.setContentsMargins(25, 25, 25, 25)
         layout.setSpacing(20)
 
@@ -562,8 +600,12 @@ class ParkingAppUI(QMainWindow):
 
         sw_left = QLabel("Popup Window")
         sw_left.setObjectName("SubHeaderLabel")
+        sw_left.setFixedWidth(110)
+        sw_left.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         sw_right = QLabel("In App")
         sw_right.setStyleSheet("font-weight: bold; color: #7B68EE;")
+        sw_right.setFixedWidth(55)
+        sw_right.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         sw_layout = QHBoxLayout()
         sw_layout.addWidget(sw_left)
@@ -572,6 +614,120 @@ class ParkingAppUI(QMainWindow):
 
         mode_box.addLayout(sw_layout)
         card_layout.addLayout(mode_box)
+
+        card_layout.addWidget(QFrame())
+
+        # 1. Slot Numbering Display Switch
+        slot_num_box = QHBoxLayout()
+        slot_num_info = QVBoxLayout()
+        slot_num_title = QLabel("🔢 Hiển Thị Số Thứ Tự Ô Đỗ")
+        slot_num_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        self.lbl_slot_num_status = QLabel("Hiển thị số thứ tự ô đỗ (1, 2, 3...) khi nhận diện" if self.show_slot_numbers else "Ẩn số thứ tự ô đỗ trên khung nhận diện")
+        self.lbl_slot_num_status.setObjectName("SubHeaderLabel")
+
+        slot_num_info.addWidget(slot_num_title)
+        slot_num_info.addWidget(self.lbl_slot_num_status)
+
+        slot_num_box.addLayout(slot_num_info)
+        slot_num_box.addStretch()
+
+        self.switch_slot_num = ToggleSwitch()
+        self.switch_slot_num.setChecked(self.show_slot_numbers)
+        self.switch_slot_num.toggled.connect(self.on_toggle_slot_numbers)
+
+        sw_sn_left = QLabel("Tắt")
+        sw_sn_left.setObjectName("SubHeaderLabel")
+        sw_sn_left.setFixedWidth(110)
+        sw_sn_left.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        sw_sn_right = QLabel("Bật")
+        sw_sn_right.setStyleSheet("font-weight: bold; color: #7B68EE;")
+        sw_sn_right.setFixedWidth(55)
+        sw_sn_right.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        sw_sn_layout = QHBoxLayout()
+        sw_sn_layout.addWidget(sw_sn_left)
+        sw_sn_layout.addWidget(self.switch_slot_num)
+        sw_sn_layout.addWidget(sw_sn_right)
+
+        slot_num_box.addLayout(sw_sn_layout)
+        card_layout.addLayout(slot_num_box)
+
+        card_layout.addWidget(QFrame())
+
+        # 2. Vehicle Bounding Box Switch
+        bbox_box = QHBoxLayout()
+        bbox_info = QVBoxLayout()
+        bbox_title = QLabel("🚘 Khung Bao Xung Quanh Phương Tiện")
+        bbox_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        self.lbl_bbox_status = QLabel("Hiển thị khung bao xung quanh phương tiện" if self.show_vehicle_bbox else "Ẩn khung bao xung quanh phương tiện")
+        self.lbl_bbox_status.setObjectName("SubHeaderLabel")
+
+        bbox_info.addWidget(bbox_title)
+        bbox_info.addWidget(self.lbl_bbox_status)
+
+        bbox_box.addLayout(bbox_info)
+        bbox_box.addStretch()
+
+        self.switch_vehicle_bbox = ToggleSwitch()
+        self.switch_vehicle_bbox.setChecked(self.show_vehicle_bbox)
+        self.switch_vehicle_bbox.toggled.connect(self.on_toggle_vehicle_bbox)
+
+        sw_bbox_left = QLabel("Tắt")
+        sw_bbox_left.setObjectName("SubHeaderLabel")
+        sw_bbox_left.setFixedWidth(110)
+        sw_bbox_left.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        sw_bbox_right = QLabel("Bật")
+        sw_bbox_right.setStyleSheet("font-weight: bold; color: #7B68EE;")
+        sw_bbox_right.setFixedWidth(55)
+        sw_bbox_right.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        sw_bbox_layout = QHBoxLayout()
+        sw_bbox_layout.addWidget(sw_bbox_left)
+        sw_bbox_layout.addWidget(self.switch_vehicle_bbox)
+        sw_bbox_layout.addWidget(sw_bbox_right)
+
+        bbox_box.addLayout(sw_bbox_layout)
+        card_layout.addLayout(bbox_box)
+
+        card_layout.addWidget(QFrame())
+
+        # 3. Vehicle Center Dot Switch
+        center_box = QHBoxLayout()
+        center_info = QVBoxLayout()
+        center_title = QLabel("🎯 Dấu Chấm Trung Tâm Phương Tiện")
+        center_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        self.lbl_center_status = QLabel("Hiển thị dấu chấm tâm của phương tiện" if self.show_vehicle_center else "Ẩn dấu chấm tâm của phương tiện")
+        self.lbl_center_status.setObjectName("SubHeaderLabel")
+
+        center_info.addWidget(center_title)
+        center_info.addWidget(self.lbl_center_status)
+
+        center_box.addLayout(center_info)
+        center_box.addStretch()
+
+        self.switch_vehicle_center = ToggleSwitch()
+        self.switch_vehicle_center.setChecked(self.show_vehicle_center)
+        self.switch_vehicle_center.toggled.connect(self.on_toggle_vehicle_center)
+
+        sw_cnt_left = QLabel("Tắt")
+        sw_cnt_left.setObjectName("SubHeaderLabel")
+        sw_cnt_left.setFixedWidth(110)
+        sw_cnt_left.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        sw_cnt_right = QLabel("Bật")
+        sw_cnt_right.setStyleSheet("font-weight: bold; color: #7B68EE;")
+        sw_cnt_right.setFixedWidth(55)
+        sw_cnt_right.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        sw_cnt_layout = QHBoxLayout()
+        sw_cnt_layout.addWidget(sw_cnt_left)
+        sw_cnt_layout.addWidget(self.switch_vehicle_center)
+        sw_cnt_layout.addWidget(sw_cnt_right)
+
+        center_box.addLayout(sw_cnt_layout)
+        card_layout.addLayout(center_box)
 
         card_layout.addWidget(QFrame())
 
@@ -634,6 +790,9 @@ class ParkingAppUI(QMainWindow):
 
         layout.addWidget(card)
         layout.addStretch()
+
+        scroll_area.setWidget(scroll_content)
+        page_layout.addWidget(scroll_area)
         return page
 
     # ================= LOGIC & THEME MANAGEMENT =================
@@ -650,6 +809,30 @@ class ParkingAppUI(QMainWindow):
 
         if not checked and self.detection_active and hasattr(self, 'lbl_video_display'):
             self.lbl_video_display.setText("🪟 Luồng Video đang hiển thị tại Cửa sổ Pop-up riêng biệt (OpenCV)...")
+
+    def on_toggle_slot_numbers(self, checked):
+        self.show_slot_numbers = checked
+        if hasattr(self, 'lbl_slot_num_status'):
+            if checked:
+                self.lbl_slot_num_status.setText("Hiển thị số thứ tự ô đỗ (1, 2, 3...) khi nhận diện")
+            else:
+                self.lbl_slot_num_status.setText("Ẩn số thứ tự ô đỗ trên khung nhận diện")
+
+    def on_toggle_vehicle_bbox(self, checked):
+        self.show_vehicle_bbox = checked
+        if hasattr(self, 'lbl_bbox_status'):
+            if checked:
+                self.lbl_bbox_status.setText("Hiển thị khung bao xung quanh phương tiện")
+            else:
+                self.lbl_bbox_status.setText("Ẩn khung bao xung quanh phương tiện")
+
+    def on_toggle_vehicle_center(self, checked):
+        self.show_vehicle_center = checked
+        if hasattr(self, 'lbl_center_status'):
+            if checked:
+                self.lbl_center_status.setText("Hiển thị dấu chấm tâm của phương tiện")
+            else:
+                self.lbl_center_status.setText("Ẩn dấu chấm tâm của phương tiện")
 
     def _update_embedded_video(self, qimg):
         if not qimg.isNull() and hasattr(self, 'lbl_video_display'):
@@ -722,6 +905,45 @@ class ParkingAppUI(QMainWindow):
             self.is_webcam = False
             self.btn_webcam.setText("📷 Sử Dụng Camera")
             self.polygons = []
+
+    def browse_preset_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn File Preset (JSON)", "", "JSON Files (*.json)"
+        )
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                polygons = [list(map(tuple, poly)) for poly in data.get("polygons", [])]
+                if not polygons:
+                    QMessageBox.warning(self, "Cảnh báo", "File preset không chứa dữ liệu ô đỗ hợp lệ.")
+                    return
+
+                preset_name = data.get("name") or os.path.splitext(os.path.basename(file_path))[0]
+
+                # Save / copy preset to presets directory if not already there
+                dest_path = os.path.join("presets", f"{preset_name}.json")
+                if os.path.abspath(file_path) != os.path.abspath(dest_path):
+                    if not os.path.exists("presets"):
+                        os.makedirs("presets")
+                    shutil.copy2(file_path, dest_path)
+
+                self.polygons = polygons
+                self.current_preset_name = preset_name
+                self.refresh_preset_list()
+
+                items = self.list_presets.findItems(preset_name, Qt.MatchFlag.MatchExactly)
+                if items:
+                    self.list_presets.setCurrentItem(items[0])
+
+                QMessageBox.information(
+                    self,
+                    "Thành công",
+                    f"Đã tải preset '{preset_name}' từ máy với {len(self.polygons)} ô đỗ."
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "Lỗi", f"Không thể đọc file preset: {e}")
 
     def choose_webcam(self):
         choose_webcam_dialog(self)
@@ -844,6 +1066,68 @@ class ParkingAppUI(QMainWindow):
 
     # ================= PAGE REFRESHERS =================
 
+    def _build_compact_slot_grid(self, status):
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        gl = QGridLayout(w)
+        gl.setContentsMargins(4, 4, 4, 4)
+        gl.setSpacing(8)
+
+        cols = 2
+        tot = len(status)
+
+        for idx in range(tot):
+            slot = idx + 1
+            is_occ = status[idx]
+
+            badge = QFrame()
+            badge.setFrameShape(QFrame.Shape.NoFrame)
+            bl = QHBoxLayout(badge)
+            bl.setContentsMargins(10, 6, 10, 6)
+            bl.setSpacing(6)
+            bl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            dot = QWidget()
+            dot.setFixedSize(8, 8)
+
+            if is_occ:
+                status_text = f"Ô {slot:02d}: Đã đỗ" if slot < 100 else f"Ô {slot}: Đã đỗ"
+                if self.is_dark_mode:
+                    badge_style = "QFrame { background-color: #2D1520; border: 1px solid #5F1D29; border-radius: 8px; }"
+                    label_style = "color: #FF859B; font-weight: bold; font-size: 12px; background-color: transparent; border: none;"
+                    dot_style = "background-color: #F43F5E; border-radius: 4px; border: none;"
+                else:
+                    badge_style = "QFrame { background-color: #FFF1F2; border: 1px solid #FECDD3; border-radius: 8px; }"
+                    label_style = "color: #E11D48; font-weight: bold; font-size: 12px; background-color: transparent; border: none;"
+                    dot_style = "background-color: #E11D48; border-radius: 4px; border: none;"
+            else:
+                status_text = f"Ô {slot:02d}: Trống" if slot < 100 else f"Ô {slot}: Trống"
+                if self.is_dark_mode:
+                    badge_style = "QFrame { background-color: #0D2818; border: 1px solid #14532D; border-radius: 8px; }"
+                    label_style = "color: #4ADE80; font-weight: bold; font-size: 12px; background-color: transparent; border: none;"
+                    dot_style = "background-color: #10B981; border-radius: 4px; border: none;"
+                else:
+                    badge_style = "QFrame { background-color: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px; }"
+                    label_style = "color: #16A34A; font-weight: bold; font-size: 12px; background-color: transparent; border: none;"
+                    dot_style = "background-color: #16A34A; border-radius: 4px; border: none;"
+
+            badge.setStyleSheet(badge_style)
+            dot.setStyleSheet(dot_style)
+
+            l = QLabel(status_text)
+            l.setStyleSheet(label_style)
+
+            bl.addWidget(dot)
+            bl.addWidget(l)
+
+            row = idx // cols
+            col = idx % cols
+            gl.addWidget(badge, row, col)
+
+        grid_rows = (tot + cols - 1) // cols
+        gl.setRowStretch(grid_rows, 1)
+        return w
+
     def _refresh_status_page(self):
         status = self.last_poly_status
         if not status:
@@ -853,73 +1137,18 @@ class ParkingAppUI(QMainWindow):
 
         empty_slots = [i + 1 for i, occ in enumerate(status) if not occ]
         occ_slots = [i + 1 for i, occ in enumerate(status) if occ]
-        tot = len(status)
 
         self.lbl_free_count.setText(str(len(empty_slots)))
         self.lbl_occ_count.setText(str(len(occ_slots)))
 
-        w = QWidget()
-        wl = QVBoxLayout(w)
-        wl.setSpacing(10)
-
-        for idx in range(tot):
-            slot = idx + 1
-            is_occ = status[idx]
-
-            f = QFrame()
-            f.setObjectName("CardFrame")
-            fl = QHBoxLayout(f)
-            fl.setContentsMargins(15, 10, 15, 10)
-
-            if is_occ:
-                txt = f"🔴  Ô {slot}:  Đã có xe đỗ"
-                col = "#F43F5E"
-            else:
-                txt = f"🟢  Ô {slot}:  Còn trống"
-                col = "#10B981"
-
-            l = QLabel(txt)
-            l.setStyleSheet(f"color: {col}; font-weight: bold; font-size: 14px;")
-            fl.addWidget(l)
-            wl.addWidget(f)
-
-        wl.addStretch()
-        self.sa_status_page.setWidget(w)
+        self.sa_status_page.setWidget(self._build_compact_slot_grid(status))
 
     def _refresh_checkin_page(self):
         status = self.last_poly_status
         if not status:
             return
 
-        tot = len(status)
-
-        w = QWidget()
-        wl = QVBoxLayout(w)
-        wl.setSpacing(10)
-
-        for idx in range(tot):
-            slot = idx + 1
-            is_occ = status[idx]
-
-            f = QFrame()
-            f.setObjectName("CardFrame")
-            fl = QHBoxLayout(f)
-            fl.setContentsMargins(15, 10, 15, 10)
-
-            if is_occ:
-                txt = f"🔴  Ô {slot}:  Đã có xe đỗ"
-                col = "#F43F5E"
-            else:
-                txt = f"🟢  Ô {slot}:  Còn trống "
-                col = "#10B981"
-
-            l = QLabel(txt)
-            l.setStyleSheet(f"color: {col}; font-weight: bold; font-size: 14px;")
-            fl.addWidget(l)
-            wl.addWidget(f)
-
-        wl.addStretch()
-        self.sa_checkin_page.setWidget(w)
+        self.sa_checkin_page.setWidget(self._build_compact_slot_grid(status))
 
     def _clear_dashboard(self):
         rep = QMessageBox.question(self, "Xác nhận", "Xóa toàn bộ dữ liệu báo cáo?")
