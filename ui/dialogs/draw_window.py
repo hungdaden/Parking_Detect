@@ -9,7 +9,9 @@ def execute_draw_window(parent_ui):
     Mở cửa sổ OpenCV tương tác để vẽ các vùng đỗ xe (polygons).
     """
     if parent_ui.is_webcam:
-        cap = cv2.VideoCapture(parent_ui.webcam_index)
+        cap = cv2.VideoCapture(parent_ui.webcam_index, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(parent_ui.webcam_index)
     else:
         cap = cv2.VideoCapture(parent_ui.video_path)
 

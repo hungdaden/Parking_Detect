@@ -31,6 +31,7 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
 
     # Retrieve filtered data from DB
     events = db_manager.get_filtered_events(start_dt, end_dt, start_time, end_time)
+    misparked_events = db_manager.get_filtered_misparked_events(start_dt, end_dt, start_time, end_time)
     slot_summary = db_manager.get_filtered_slot_summary(start_dt, end_dt, start_time, end_time)
     license_plates = db_manager.get_filtered_license_plates(start_dt, end_dt, start_time, end_time)
     stats = db_manager.get_filtered_stats(start_dt, end_dt, start_time, end_time)
@@ -51,6 +52,9 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
 
     font_badge_out = Font(name="Segoe UI", size=10, bold=True, color="B45309")
     fill_badge_out = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
+
+    font_badge_misparked = Font(name="Segoe UI", size=10, bold=True, color="B91C1C")
+    fill_badge_misparked = PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid")
 
     fill_title = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid")  # ClickUp Indigo
     fill_header = PatternFill(start_color="6366F1", end_color="6366F1", fill_type="solid") # Soft Indigo Header
@@ -93,8 +97,8 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
     cell_a7 = ws_summary.cell(row=7, column=1, value="📊 THỐNG KÊ TỔNG QUAN")
     cell_a7.font = font_section
 
-    kpi_headers = ["Tổng Lượt Xe Vào", "Tổng Lượt Xe Ra", "Tổng Số Sự Kiện"]
-    kpi_values = [stats["total_in"], stats["total_out"], len(events)]
+    kpi_headers = ["Tổng Lượt Xe Vào", "Tổng Lượt Xe Ra", "Tổng Số Sự Kiện", "Đỗ Sai Vị Trí"]
+    kpi_values = [stats["total_in"], stats["total_out"], len(events), stats.get("total_misparked", 0)]
 
     for idx, (h, v) in enumerate(zip(kpi_headers, kpi_values), start=1):
         cell_h = ws_summary.cell(row=8, column=idx, value=h)
@@ -103,7 +107,7 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
         cell_h.alignment = align_center
 
         cell_v = ws_summary.cell(row=9, column=idx, value=v)
-        cell_v.font = Font(name="Segoe UI", size=14, bold=True, color="4F46E5")
+        cell_v.font = Font(name="Segoe UI", size=14, bold=True, color="E11D48" if idx == 4 else "4F46E5")
         cell_v.fill = fill_kpi
         cell_v.alignment = align_center
 
@@ -276,6 +280,56 @@ def export_parking_report_to_excel(file_path: str, db_manager: Any, filter_opts:
     ws_plates.column_dimensions["B"].width = 24
     ws_plates.column_dimensions["C"].width = 24
     ws_plates.column_dimensions["D"].width = 28
+
+    # ==========================================
+    # SHEET 4: LỊCH SỬ XE ĐỖ SAI VỊ TRÍ (MISPARKED LOGS)
+    # ==========================================
+    ws_misparked: Worksheet = wb.create_sheet(title="Lịch Sử Xe Đỗ Sai Vị Trí")
+    ws_misparked.views.sheetView[0].showGridLines = True
+
+    # Title Banner
+    t_mp = ws_misparked.cell(row=1, column=1, value="⚠️ DANH SÁCH CHI TIẾT CÁC VỤ VI PHẠM ĐỖ SAI VỊ TRÍ")
+    ws_misparked.merge_cells("A1:F2")
+    t_mp.font = font_title
+    t_mp.fill = PatternFill(start_color="E11D48", end_color="E11D48", fill_type="solid")
+    t_mp.alignment = align_center
+
+    cell_mp_a4 = ws_misparked.cell(row=4, column=1, value=f"Bộ lọc: {filter_desc}")
+    cell_mp_a4.font = font_subtitle
+
+    misparked_headers = ["STT", "ID Sự Kiện", "Thời Gian Ghi Nhận", "Vị Trí Ô Liên Quan", "Mã Định Danh Xe", "Trạng Thái"]
+    for col_idx, text in enumerate(misparked_headers, start=1):
+        cell = ws_misparked.cell(row=6, column=col_idx, value=text)
+        cell.font = font_header
+        cell.fill = PatternFill(start_color="F43F5E", end_color="F43F5E", fill_type="solid")
+        cell.alignment = align_center
+        cell.border = border_all
+
+    for idx, ev in enumerate(misparked_events, start=1):
+        r = 6 + idx
+        vals = [idx, ev["id"], ev["timestamp"], f"Ô {ev['slot_id']}", ev["vehicle_id"] or "", "ĐỖ SAI VỊ TRÍ"]
+
+        for col_idx, val in enumerate(vals, start=1):
+            cell = ws_misparked.cell(row=r, column=col_idx, value=val)
+            cell.font = font_data
+            cell.alignment = align_center
+            cell.border = border_all
+            if r % 2 == 0 and col_idx != 6:
+                cell.fill = fill_zebra
+            if col_idx == 6:
+                cell.font = font_badge_misparked
+                cell.fill = fill_badge_misparked
+
+        ws_misparked.row_dimensions[r].height = 20
+
+    if not misparked_events:
+        empty_mp = ws_misparked.cell(row=7, column=1, value="Không tìm thấy sự kiện đỗ sai vị trí nào.")
+        empty_mp.font = font_subtitle
+
+    for col in ws_misparked.columns:
+        max_len = max(len(str(cell.value or '')) for cell in col)
+        col_letter = get_column_letter(col[0].column if col[0].column is not None else 1)
+        ws_misparked.column_dimensions[col_letter].width = max(max_len + 4, 18)
 
     # Save to file
     wb.save(file_path)

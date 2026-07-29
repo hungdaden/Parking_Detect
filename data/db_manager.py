@@ -88,6 +88,20 @@ class ParkingDB:
         conn.commit()
         conn.close()
 
+    def record_misparked_event(self, slot_id, vehicle_id=None, preset_name=""):
+        conn = self._get_conn()
+        c = conn.cursor()
+        if not vehicle_id:
+            vehicle_id = self._gen_vehicle_id()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute(
+            "INSERT INTO parking_events (slot_id, vehicle_id, event_type, timestamp, preset_name) VALUES (?, ?, 'MISPARKED', ?, ?)",
+            (slot_id, vehicle_id, now, preset_name)
+        )
+        conn.commit()
+        conn.close()
+        return vehicle_id
+
     def get_today_stats(self):
         conn = self._get_conn()
         c = conn.cursor()
@@ -96,12 +110,15 @@ class ParkingDB:
         total_in = c.fetchone()["cnt"]
         c.execute("SELECT COUNT(*) as cnt FROM parking_events WHERE event_type='OUT' AND timestamp LIKE ?", (today + "%",))
         total_out = c.fetchone()["cnt"]
+        c.execute("SELECT COUNT(*) as cnt FROM parking_events WHERE event_type='MISPARKED' AND timestamp LIKE ?", (today + "%",))
+        total_misparked = c.fetchone()["cnt"]
         c.execute("SELECT COUNT(*) as cnt FROM slot_status WHERE is_occupied = 1")
         currently_occupied = c.fetchone()["cnt"]
         conn.close()
         return {
             "total_in": total_in,
             "total_out": total_out,
+            "total_misparked": total_misparked,
             "currently_occupied": currently_occupied
         }
 
@@ -236,6 +253,28 @@ class ParkingDB:
         conn.close()
         return rows
 
+    def get_misparked_history(self, limit=20):
+        conn = self._get_conn()
+        c = conn.cursor()
+        c.execute("SELECT * FROM parking_events WHERE event_type='MISPARKED' ORDER BY id DESC LIMIT ?", (limit,))
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows
+
+    def get_filtered_misparked_events(self, start_dt=None, end_dt=None, start_time=None, end_time=None):
+        conn = self._get_conn()
+        c = conn.cursor()
+        where_str, params = self._build_where_clause(start_dt, end_dt, start_time, end_time)
+        if where_str:
+            where_str += " AND event_type='MISPARKED'"
+        else:
+            where_str = " WHERE event_type='MISPARKED'"
+        query = f"SELECT * FROM parking_events{where_str} ORDER BY id ASC"
+        c.execute(query, params)
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows
+
     def get_filtered_stats(self, start_dt=None, end_dt=None, start_time=None, end_time=None):
         conn = self._get_conn()
         c = conn.cursor()
@@ -245,9 +284,11 @@ class ParkingDB:
         if where_str:
             where_in = where_str + " AND event_type='IN'"
             where_out = where_str + " AND event_type='OUT'"
+            where_misparked = where_str + " AND event_type='MISPARKED'"
         else:
             where_in = " WHERE event_type='IN'"
             where_out = " WHERE event_type='OUT'"
+            where_misparked = " WHERE event_type='MISPARKED'"
 
         c.execute(f"SELECT COUNT(*) as cnt FROM parking_events{where_in}", params)
         total_in = c.fetchone()["cnt"]
@@ -255,9 +296,13 @@ class ParkingDB:
         c.execute(f"SELECT COUNT(*) as cnt FROM parking_events{where_out}", params)
         total_out = c.fetchone()["cnt"]
 
+        c.execute(f"SELECT COUNT(*) as cnt FROM parking_events{where_misparked}", params)
+        total_misparked = c.fetchone()["cnt"]
+
         conn.close()
         return {
             "total_in": total_in,
-            "total_out": total_out
+            "total_out": total_out,
+            "total_misparked": total_misparked
         }
 

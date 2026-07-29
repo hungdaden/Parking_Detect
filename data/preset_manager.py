@@ -12,7 +12,7 @@ class PresetManager:
 
     @staticmethod
     def get_preset_list():
-        files = [f for f in os.listdir(PRESETS_DIR) if f.endswith('.json')]
+        files = [f for f in os.listdir(PRESETS_DIR) if f.endswith('.json') and f != 'app_config.json']
         files.sort(key=lambda x: os.path.getmtime(os.path.join(PRESETS_DIR, x)), reverse=True)
         return [f.replace('.json', '') for f in files]
 

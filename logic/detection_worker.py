@@ -4,6 +4,7 @@ import time
 import os
 import sys
 import re
+import math
 import concurrent.futures
 
 from ultralytics import YOLO
@@ -19,6 +20,51 @@ def resource_path(relative_path):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
+
+
+def _compute_vehicle_slot_overlap(box, polygons):
+    """
+    Tính toán tỉ lệ overlap giữa Bounding Box xe [x1, y1, x2, y2] và danh sách các polygon ô đỗ.
+    Khử nhiễu góc nghiêng camera chéo (Perspective Distortion) bằng cách tính diện tích
+    trên phân vùng chân xe / bánh xe tiếp xúc mặt đường (Ground Contact Footprint - 40% chiều cao dưới của xe).
+    Trả về: (total_overlap_ratio, max_single_slot_ratio, secondary_slot_ratio, primary_slot_id)
+    """
+    x1, y1, x2, y2 = [int(v) for v in box]
+    box_w = max(1, x2 - x1)
+    box_h = max(1, y2 - y1)
+
+    # Ground Contact Footprint: Lấy 40% chiều cao phía dưới xe (vệt bánh xe tiếp xúc mặt đường)
+    footprint_y1 = y1 + int(box_h * 0.60)
+    footprint_h = max(1, y2 - footprint_y1)
+    box_area = float(box_w * footprint_h)
+
+    box_mask = np.ones((footprint_h, box_w), dtype=np.uint8)
+
+    total_overlap_pixels = 0
+    slot_ratios = []
+
+    for idx, poly in enumerate(polygons):
+        if not poly or len(poly) < 3:
+            continue
+        local_poly = np.array([[pt[0] - x1, pt[1] - footprint_y1] for pt in poly], dtype=np.int32)
+        slot_mask = np.zeros((footprint_h, box_w), dtype=np.uint8)
+        cv2.fillPoly(slot_mask, [local_poly], 1)
+
+        overlap_px = np.count_nonzero(slot_mask & box_mask)
+        ratio = float(overlap_px) / box_area
+        if ratio > 0:
+            slot_ratios.append((ratio, idx + 1))
+
+        total_overlap_pixels += overlap_px
+
+    slot_ratios.sort(key=lambda item: item[0], reverse=True)
+
+    max_single_slot_ratio = slot_ratios[0][0] if slot_ratios else 0.0
+    primary_slot_id = slot_ratios[0][1] if slot_ratios else 1
+    secondary_slot_ratio = slot_ratios[1][0] if len(slot_ratios) > 1 else 0.0
+
+    total_overlap_ratio = min(1.0, float(total_overlap_pixels) / box_area)
+    return total_overlap_ratio, max_single_slot_ratio, secondary_slot_ratio, primary_slot_id
 
 
 class DetectionWorker(QObject):
@@ -125,7 +171,9 @@ class DetectionWorker(QObject):
         is_webcam = self.app.is_webcam
 
         if is_webcam:
-            cap = cv2.VideoCapture(self.app.webcam_index)
+            cap = cv2.VideoCapture(self.app.webcam_index, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(self.app.webcam_index)
         else:
             cap = cv2.VideoCapture(self.app.video_path)
 
@@ -149,7 +197,6 @@ class DetectionWorker(QObject):
 
         self.app.prev_poly_status = [False] * len(self.app.polygons)
 
-        DEBOUNCE_THRESHOLD = 10
         debounce_counters = [0] * len(self.app.polygons)
         confirmed_status = [False] * len(self.app.polygons)
 
@@ -159,6 +206,9 @@ class DetectionWorker(QObject):
         polygons_copy = [poly[:] for poly in self.app.polygons]
         preset_name = self.app.current_preset_name
         self._cv_window_open = False
+
+        tracked_vehicles = {}
+        next_track_id = 1
 
         while cap.isOpened() and self._is_running:
             if not is_webcam:
@@ -177,18 +227,149 @@ class DetectionWorker(QObject):
             results = model.predict(frame, stream=True, verbose=False, classes=[2, 5, 7])
 
             car_centers = []
+            detected_vehicles = []
             for r in results:
                 boxes = r.boxes
                 if boxes is not None:
                     for box in boxes:
-                        x1, y1, x2, y2 = box.xyxy[0]
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy() if hasattr(box.xyxy[0], 'cpu') else box.xyxy[0]
                         cx = int((x1 + x2) / 2)
                         cy = int(y2 - (y2 - y1) * 0.3)
                         car_centers.append((cx, cy))
-                        if getattr(self.app, 'show_vehicle_bbox', True):
-                            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (200, 200, 200), 1)
-                        if getattr(self.app, 'show_vehicle_center', True):
-                            cv2.circle(frame, (cx, cy), 4, (0, 255, 255), -1)
+                        box_list = [float(x1), float(y1), float(x2), float(y2)]
+                        detected_vehicles.append((box_list, cx, cy))
+
+            curr_time = time.time()
+            misparked_enabled = getattr(self.app, 'misparked_enabled', True)
+            misparked_delay_sec = float(getattr(self.app, 'misparked_delay_sec', 10))
+
+            updated_tracked_keys = set()
+            for vbox, vcx, vcy in detected_vehicles:
+                bx1, by1, bx2, by2 = int(vbox[0]), int(vbox[1]), int(vbox[2]), int(vbox[3])
+                best_id = None
+                best_dist = 60.0
+
+                for tid, tdata in tracked_vehicles.items():
+                    if tid in updated_tracked_keys:
+                        continue
+                    dist = math.hypot(vcx - tdata['last_cx'], vcy - tdata['last_cy'])
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_id = tid
+
+                if best_id is None:
+                    best_id = next_track_id
+                    next_track_id += 1
+                    tracked_vehicles[best_id] = {
+                        'last_cx': vcx,
+                        'last_cy': vcy,
+                        'pos_history': [],
+                        'stationary_start': None,
+                        'reported_db': False,
+                        'last_seen': curr_time
+                    }
+
+                tdata = tracked_vehicles[best_id]
+                updated_tracked_keys.add(best_id)
+
+                # Calculate frame-to-frame move BEFORE updating last_cx/last_cy
+                frame_move = math.hypot(vcx - tdata['last_cx'], vcy - tdata['last_cy'])
+                tdata['last_cx'] = vcx
+                tdata['last_cy'] = vcy
+                tdata['last_seen'] = curr_time
+
+                pos_history = tdata.get('pos_history', [])
+
+                # Reset history if significant movement is detected between frames
+                if frame_move >= 2.0:
+                    pos_history = []
+                    tdata['stationary_start'] = None
+                    tdata['reported_db'] = False
+
+                pos_history.append((curr_time, vcx, vcy))
+                pos_history = [p for p in pos_history if curr_time - p[0] <= 1.0]
+                tdata['pos_history'] = pos_history
+
+                history_time_span = curr_time - pos_history[0][0] if pos_history else 0.0
+                max_displacement = max(math.hypot(vcx - px, vcy - py) for _, px, py in pos_history) if pos_history else 0.0
+
+                if max_displacement > 4.0:
+                    # Rolling window displacement exceeds threshold -> clear history & reset timer
+                    pos_history = [(curr_time, vcx, vcy)]
+                    tdata['pos_history'] = pos_history
+                    tdata['stationary_start'] = None
+                    tdata['reported_db'] = False
+                    is_stopped_completely = False
+                else:
+                    is_stopped_completely = (history_time_span >= 0.3)
+
+                if not is_stopped_completely:
+                    tdata['stationary_start'] = None
+                    tdata['reported_db'] = False
+                else:
+                    if tdata['stationary_start'] is None:
+                        tdata['stationary_start'] = curr_time
+
+                stat_duration = 0.0
+                is_misparked_active = False
+
+                if misparked_enabled and polygons_copy:
+                    is_center_in_any_slot = False
+                    for poly in polygons_copy:
+                        if poly and len(poly) >= 3:
+                            poly_np = np.array(poly, np.int32)
+                            if cv2.pointPolygonTest(poly_np, (vcx, vcy), False) >= 0:
+                                is_center_in_any_slot = True
+                                break
+
+                    tot_ratio, max_ratio, sec_ratio, primary_slot = _compute_vehicle_slot_overlap(vbox, polygons_copy)
+                    # Vehicle is misplaced IF:
+                    # 1) Center is NOT inside any slot AND overlaps slot space (tot_ratio >= 0.15), OR
+                    # 2) Center IS inside a slot, BUT a portion of the car extends into ANOTHER slot (sec_ratio >= 0.15)!
+                    is_misplaced = (tot_ratio >= 0.15) and ((not is_center_in_any_slot) or (sec_ratio >= 0.15))
+
+                    if not is_misplaced:
+                        tdata['stationary_start'] = None
+                        tdata['reported_db'] = False
+                        tdata['is_misparked_active'] = False
+                    else:
+                        if is_stopped_completely and tdata['stationary_start'] is not None:
+                            stat_duration = curr_time - tdata['stationary_start']
+                            bx1, by1, bx2, by2 = int(vbox[0]), int(vbox[1]), int(vbox[2]), int(vbox[3])
+                            if stat_duration >= misparked_delay_sec:
+                                is_misparked_active = True
+                                tdata['is_misparked_active'] = True
+                                cv2.rectangle(frame, (bx1, by1), (bx2, by2), (0, 0, 255), 3)
+                                label_text = f"DO SAI VI TRI ({int(stat_duration)}s)"
+                                (tw, th), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                                cv2.rectangle(frame, (bx1, max(0, by1 - 25)), (bx1 + tw + 10, max(25, by1)), (0, 0, 255), -1)
+                                cv2.putText(frame, label_text, (bx1 + 5, max(18, by1 - 7)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+                                if not tdata['reported_db']:
+                                    vid_str = f"V-{best_id:03d}"
+                                    self.app.db.record_misparked_event(slot_id=primary_slot, vehicle_id=vid_str, preset_name=preset_name)
+                                    tdata['reported_db'] = True
+                            else:
+                                tdata['is_misparked_active'] = False
+                                if getattr(self.app, 'show_stationary_timer', True):
+                                    label_text = f"Dang dung ({int(stat_duration)}s/{int(misparked_delay_sec)}s)"
+                                    cv2.rectangle(frame, (bx1, by1), (bx2, by2), (0, 255, 255), 2)
+                                    (tw, th), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                                    cv2.rectangle(frame, (bx1, max(0, by1 - 22)), (bx1 + tw + 10, max(22, by1)), (0, 200, 200), -1)
+                                    cv2.putText(frame, label_text, (bx1 + 5, max(16, by1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                        else:
+                            tdata['is_misparked_active'] = False
+
+                if getattr(self.app, 'show_vehicle_bbox', True) and not is_misparked_active:
+                    cv2.rectangle(frame, (bx1, by1), (bx2, by2), (200, 200, 200), 1)
+                if getattr(self.app, 'show_vehicle_center', True):
+                    cv2.circle(frame, (vcx, vcy), 4, (0, 255, 255), -1)
+
+            stale_keys = [k for k, v in tracked_vehicles.items() if curr_time - v['last_seen'] > 3.0]
+            for k in stale_keys:
+                del tracked_vehicles[k]
+
+            self.app.current_misparked_count = sum(1 for v in tracked_vehicles.values() if v.get('is_misparked_active', False))
 
             occupied_count = 0
             current_status = []
@@ -214,10 +395,12 @@ class DetectionWorker(QObject):
                     cv2.putText(frame, str(idx + 1), (pcx - 8, pcy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             if len(current_status) == len(confirmed_status):
+                curr_debounce_sec = float(getattr(self.app, 'debounce_delay_sec', 0.5))
+                target_debounce_frames = max(1, int((fps if fps > 0 else 30) * curr_debounce_sec))
                 for idx in range(len(current_status)):
                     if current_status[idx] != confirmed_status[idx]:
                         debounce_counters[idx] += 1
-                        if debounce_counters[idx] >= DEBOUNCE_THRESHOLD:
+                        if debounce_counters[idx] >= target_debounce_frames:
                             slot_id = idx + 1
                             if current_status[idx] and not confirmed_status[idx]:
                                 self.app.db.record_vehicle_in(slot_id, preset_name)

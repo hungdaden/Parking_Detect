@@ -9,17 +9,16 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QFileDialog, QMessageBox, 
     QListWidget, QFrame, QDialog, QScrollArea, QGridLayout,
     QGraphicsOpacityEffect, QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView,
-    QStackedWidget, QGraphicsDropShadowEffect
+    QStackedWidget, QGraphicsDropShadowEffect, QComboBox
 )
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer
-from PyQt6.QtGui import QFont, QIcon, QColor, QPixmap, QImage
+from PyQt6.QtGui import QFont, QIcon, QColor, QPixmap, QImage, QGuiApplication
 
 from data.db_manager import ParkingDB
 from data.preset_manager import PresetManager
 from logic.detection_worker import DetectionWorker
 from ui.theme import LIGHT_THEME, DARK_THEME, set_titlebar_theme, resource_path
-from ui.components.toggle_switch import ToggleSwitch
-from ui.components.hover_sidebar import HoverSidebarFrame
+from ui.components import ToggleSwitch, HoverSidebarFrame, ClickUpRangeSlider
 from ui.dialogs import (
     choose_webcam_dialog,
     show_checkin_guidance_dialog,
@@ -47,7 +46,11 @@ class ParkingAppUI(QMainWindow):
         self.show_video_embedded = True  # Default: Embedded inside App UI
         self.show_slot_numbers = True    # Default: Show slot numbers
         self.show_vehicle_bbox = True    # Default: Show vehicle bounding boxes
-        self.show_vehicle_center = True  # Default: Show vehicle center dots
+        self.show_vehicle_center = True  # Default: Show vehicle center dot
+        self.misparked_enabled = True    # Default: Enable misplaced parking warning
+        self.misparked_delay_sec = 10    # Default: 10 seconds stationary delay
+        self.show_stationary_timer = True # Default: Show yellow live timer badge
+        self.debounce_delay_sec = 0.5    # Default: 0.5 seconds anti-flicker debounce
 
         self.last_poly_status = []
         self.prev_poly_status = []
@@ -57,7 +60,17 @@ class ParkingAppUI(QMainWindow):
         self.alpr_enabled = False
         self.is_dark_mode = False
         self.alpr_reader = None
+
+        self.selected_guidance_screens = [0]
+        self._active_guidance_dialogs = []
+        self.load_app_config()
         self.preload_alpr()
+
+        app_instance = QApplication.instance()
+        if isinstance(app_instance, QGuiApplication):
+            app_instance.screenAdded.connect(self._on_screens_changed)
+            app_instance.screenRemoved.connect(self._on_screens_changed)
+            app_instance.primaryScreenChanged.connect(self._on_screens_changed)
 
         self.init_ui()
 
@@ -258,6 +271,9 @@ class ParkingAppUI(QMainWindow):
         else:
             self.timer_dash.stop()
 
+        if index == 4:
+            self.refresh_guidance_screen_combo()
+
     # ================= PAGE BUILDERS =================
 
     def _create_page_config(self):
@@ -296,22 +312,78 @@ class ParkingAppUI(QMainWindow):
 
         card_layout.addLayout(v_layout1)
 
-        # Time crop range
-        v_layout2 = QHBoxLayout()
-        v_layout2.addWidget(QLabel("Bắt đầu (giây):"))
+        # ClickUp-Style Video Time Crop Section
+        time_card = QFrame()
+        time_card.setObjectName("CardFrame")
+        time_card.setStyleSheet("""
+            QFrame#CardFrame {
+                background-color: rgba(123, 104, 238, 0.05);
+                border: 1px dashed rgba(123, 104, 238, 0.35);
+                border-radius: 12px;
+            }
+        """)
+        tc_layout = QVBoxLayout(time_card)
+        tc_layout.setContentsMargins(14, 12, 14, 12)
+        tc_layout.setSpacing(8)
+
+        # Header bar with info badges
+        header_time = QHBoxLayout()
+        lbl_time_title = QLabel("🎬 Cắt Đoạn Video")
+        lbl_time_title.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
+
+        self.lbl_time_duration = QLabel("⏳ Tổng thời lượng: --:--")
+        self.lbl_time_duration.setObjectName("SubHeaderLabel")
+        self.lbl_time_duration.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+
+        header_time.addWidget(lbl_time_title)
+        header_time.addStretch()
+        header_time.addWidget(self.lbl_time_duration)
+        tc_layout.addLayout(header_time)
+
+        # Dual Range Slider (ClickUp Range Slider)
+        self.range_slider = ClickUpRangeSlider(minimum=0, maximum=300, low_val=0, high_val=300)
+        self.range_slider.valuesChanged.connect(self._on_range_slider_changed)
+        tc_layout.addWidget(self.range_slider)
+
+        # Bottom Controls & Input Badges (Bi-directional sync with entry_start & entry_end)
+        ctrl_layout = QHBoxLayout()
+        ctrl_layout.setSpacing(8)
+
+        ctrl_layout.addWidget(QLabel("⏱️ Bắt đầu:"))
         self.entry_start = QLineEdit("0")
-        v_layout2.addWidget(self.entry_start)
+        self.entry_start.setFixedWidth(55)
+        self.entry_start.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.entry_start.setToolTip("Nhập thời điểm bắt đầu (giây)")
+        self.entry_start.textChanged.connect(self._on_entry_start_changed)
+        ctrl_layout.addWidget(self.entry_start)
 
-        v_layout2.addWidget(QLabel("Kết thúc (giây):"))
+        self.lbl_start_fmt = QLabel("(00:00)")
+        self.lbl_start_fmt.setStyleSheet("color: #7B68EE; font-weight: bold;")
+        ctrl_layout.addWidget(self.lbl_start_fmt)
+
+        ctrl_layout.addSpacing(15)
+
+        ctrl_layout.addWidget(QLabel("⏱️ Kết thúc:"))
         self.entry_end = QLineEdit("0")
-        v_layout2.addWidget(self.entry_end)
+        self.entry_end.setFixedWidth(55)
+        self.entry_end.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.entry_end.setToolTip("Nhập thời điểm kết thúc (giây), 0 = đến hết video")
+        self.entry_end.textChanged.connect(self._on_entry_end_changed)
+        ctrl_layout.addWidget(self.entry_end)
 
-        lbl_hint = QLabel("(0 = chạy hết toàn bộ video)")
-        lbl_hint.setObjectName("SubHeaderLabel")
-        v_layout2.addWidget(lbl_hint)
-        v_layout2.addStretch()
+        self.lbl_end_fmt = QLabel("(Hết video)")
+        self.lbl_end_fmt.setStyleSheet("color: #7B68EE; font-weight: bold;")
+        ctrl_layout.addWidget(self.lbl_end_fmt)
 
-        card_layout.addLayout(v_layout2)
+        ctrl_layout.addStretch()
+
+        self.lbl_range_span = QLabel("🎯 Chạy toàn bộ video")
+        self.lbl_range_span.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+        self.lbl_range_span.setStyleSheet("color: #10B981;")
+        ctrl_layout.addWidget(self.lbl_range_span)
+
+        tc_layout.addLayout(ctrl_layout)
+        card_layout.addWidget(time_card)
 
         # Presets & Draw region section
         card_layout.addWidget(QLabel("Preset Khoanh Vùng Ô Đỗ:"))
@@ -492,9 +564,12 @@ class ParkingAppUI(QMainWindow):
         self.lbl_in = QLabel("🚗 Lượt vào: 0")
         self.lbl_out = QLabel("🚙 Lượt ra: 0")
         self.lbl_occ = QLabel("🅿️ Đang đỗ: 0")
+        self.lbl_misparked = QLabel("⚠️ Đỗ sai: 0")
+        self.lbl_misparked.setStyleSheet("font-size: 14px; font-weight: bold; color: #E11D48;")
         for l in [self.lbl_in, self.lbl_out, self.lbl_occ]:
             l.setStyleSheet("font-size: 14px; font-weight: bold; color: #7B68EE;")
             sl.addWidget(l)
+        sl.addWidget(self.lbl_misparked)
 
         layout.addWidget(self.f_stats)
 
@@ -519,6 +594,16 @@ class ParkingAppUI(QMainWindow):
             self.table_hist.verticalHeader().setVisible(False)  # type: ignore
         box2.addWidget(self.table_hist)
         grid.addLayout(box2, 0, 1)
+
+        box3 = QVBoxLayout()
+        box3.addWidget(QLabel("⚠️ Vi Phạm Đỗ Sai Vị Trí"))
+        self.table_misparked = QTableWidget()
+        self.table_misparked.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table_misparked.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        if self.table_misparked.verticalHeader() is not None:
+            self.table_misparked.verticalHeader().setVisible(False)  # type: ignore
+        box3.addWidget(self.table_misparked)
+        grid.addLayout(box3, 0, 2)
 
         layout.addLayout(grid)
 
@@ -731,6 +816,172 @@ class ParkingAppUI(QMainWindow):
 
         card_layout.addWidget(QFrame())
 
+        # 4. Misplaced Parking Warning Switch
+        misparked_box = QHBoxLayout()
+        misparked_info = QVBoxLayout()
+        misparked_title = QLabel("⚠️ Cảnh Báo Xe Đỗ Sai Vị Trí")
+        misparked_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #E11D48;")
+
+        self.lbl_misparked_status = QLabel(
+            f"Phát cảnh báo và lưu báo cáo khi xe đứng im khoảng {self.misparked_delay_sec}s lấn vào ô đỗ" if self.misparked_enabled else "Đã tắt cảnh báo đỗ sai vị trí"
+        )
+        self.lbl_misparked_status.setObjectName("SubHeaderLabel")
+
+        misparked_info.addWidget(misparked_title)
+        misparked_info.addWidget(self.lbl_misparked_status)
+
+        misparked_box.addLayout(misparked_info)
+        misparked_box.addStretch()
+
+        self.switch_misparked = ToggleSwitch()
+        self.switch_misparked.setChecked(self.misparked_enabled)
+        self.switch_misparked.toggled.connect(self.on_toggle_misparked)
+
+        sw_mp_left = QLabel("Tắt")
+        sw_mp_left.setObjectName("SubHeaderLabel")
+        sw_mp_left.setFixedWidth(110)
+        sw_mp_left.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        sw_mp_right = QLabel("Bật")
+        sw_mp_right.setStyleSheet("font-weight: bold; color: #E11D48;")
+        sw_mp_right.setFixedWidth(55)
+        sw_mp_right.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        sw_mp_layout = QHBoxLayout()
+        sw_mp_layout.addWidget(sw_mp_left)
+        sw_mp_layout.addWidget(self.switch_misparked)
+        sw_mp_layout.addWidget(sw_mp_right)
+
+        misparked_box.addLayout(sw_mp_layout)
+        card_layout.addLayout(misparked_box)
+
+        card_layout.addWidget(QFrame())
+
+        # 5. Stationary Duration Selector Dropdown (QComboBox)
+        delay_box = QHBoxLayout()
+        delay_info = QVBoxLayout()
+        delay_title = QLabel("⏱️ Thời Gian Chờ Cảnh Báo")
+        delay_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        delay_desc = QLabel("Thời gian phương tiện phải dừng hoàn toàn trước khi hệ thống báo vi phạm.")
+        delay_desc.setObjectName("SubHeaderLabel")
+
+        delay_info.addWidget(delay_title)
+        delay_info.addWidget(delay_desc)
+
+        delay_box.addLayout(delay_info)
+        delay_box.addStretch()
+
+        self.combo_misparked_delay = QComboBox()
+        self.combo_misparked_delay.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.combo_misparked_delay.setMinimumWidth(140)
+        self.combo_misparked_delay.setFixedHeight(36)
+
+        for sec in range(5, 31):
+            self.combo_misparked_delay.addItem(f"{sec} giây", userData=sec)
+
+        curr_delay = int(getattr(self, 'misparked_delay_sec', 10))
+        matching_idx = 5  # default 10s (5s is idx 0)
+        for idx in range(self.combo_misparked_delay.count()):
+            if self.combo_misparked_delay.itemData(idx) == curr_delay:
+                matching_idx = idx
+                break
+        self.combo_misparked_delay.setCurrentIndex(matching_idx)
+        self.combo_misparked_delay.currentIndexChanged.connect(self.on_misparked_delay_combo_changed)
+
+        delay_box.addWidget(self.combo_misparked_delay)
+        card_layout.addLayout(delay_box)
+
+        card_layout.addWidget(QFrame())
+
+        # 6. Show/Hide Stationary Timer Badge Switch
+        timer_badge_box = QHBoxLayout()
+        timer_badge_info = QVBoxLayout()
+        timer_badge_title = QLabel("⏳ Thẻ Đếm Giây Xe Đang Dừng")
+        timer_badge_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        self.lbl_timer_badge_status = QLabel(
+            "Hiển thị thẻ màu vàng đếm ngược giây đang dừng (Xs/10s) trên luồng camera" if self.show_stationary_timer else "Ẩn thẻ đếm giây vàng (chỉ hiển thị nhãn đỏ khi vi phạm)"
+        )
+        self.lbl_timer_badge_status.setObjectName("SubHeaderLabel")
+
+        timer_badge_info.addWidget(timer_badge_title)
+        timer_badge_info.addWidget(self.lbl_timer_badge_status)
+
+        timer_badge_box.addLayout(timer_badge_info)
+        timer_badge_box.addStretch()
+
+        self.switch_stationary_timer = ToggleSwitch()
+        self.switch_stationary_timer.setChecked(self.show_stationary_timer)
+        self.switch_stationary_timer.toggled.connect(self.on_toggle_stationary_timer)
+
+        sw_timer_left = QLabel("Tắt")
+        sw_timer_left.setObjectName("SubHeaderLabel")
+        sw_timer_left.setFixedWidth(110)
+        sw_timer_left.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        sw_timer_right = QLabel("Bật")
+        sw_timer_right.setStyleSheet("font-weight: bold; color: #7B68EE;")
+        sw_timer_right.setFixedWidth(55)
+        sw_timer_right.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        sw_timer_layout = QHBoxLayout()
+        sw_timer_layout.addWidget(sw_timer_left)
+        sw_timer_layout.addWidget(self.switch_stationary_timer)
+        sw_timer_layout.addWidget(sw_timer_right)
+
+        timer_badge_box.addLayout(sw_timer_layout)
+        card_layout.addLayout(timer_badge_box)
+
+        card_layout.addWidget(QFrame())
+
+        # 7. Debounce Delay Control Dropdown
+        debounce_box = QHBoxLayout()
+        debounce_info = QVBoxLayout()
+        debounce_title = QLabel("🛡️ Debounce Delay chống nhiễu")
+        debounce_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        debounce_desc = QLabel("Độ trễ thời gian duy trì trạng thái ổn định trước khi xác nhận có xe vào/ra ô đỗ.")
+        debounce_desc.setObjectName("SubHeaderLabel")
+
+        debounce_info.addWidget(debounce_title)
+        debounce_info.addWidget(debounce_desc)
+
+        debounce_box.addLayout(debounce_info)
+        debounce_box.addStretch()
+
+        self.combo_debounce_delay = QComboBox()
+        self.combo_debounce_delay.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.combo_debounce_delay.setMinimumWidth(180)
+        self.combo_debounce_delay.setFixedHeight(36)
+
+        debounce_options = [
+            (0.2, "0.2 giây (Siêu nhạy)"),
+            (0.3, "0.3 giây (Nhanh)"),
+            (0.5, "0.5 giây (Mặc định)"),
+            (1.0, "1.0 giây (Ổn định)"),
+            (1.5, "1.5 giây (Chậm)"),
+            (2.0, "2.0 giây (Rất chậm)"),
+            (3.0, "3.0 giây (Chống nhiễu cao)"),
+            (5.0, "5.0 giây (Cực kỳ ổn định)"),
+            (10.0, "10.0 giây (Độ trễ cao)")
+        ]
+
+        for sec_val, label_str in debounce_options:
+            self.combo_debounce_delay.addItem(label_str, userData=sec_val)
+
+        curr_db_sec = float(getattr(self, 'debounce_delay_sec', 0.5))
+        db_matching_idx = 2  # default 0.5s
+        for idx in range(self.combo_debounce_delay.count()):
+            if abs(self.combo_debounce_delay.itemData(idx) - curr_db_sec) < 0.05:
+                db_matching_idx = idx
+                break
+        self.combo_debounce_delay.setCurrentIndex(db_matching_idx)
+        self.combo_debounce_delay.currentIndexChanged.connect(self.on_debounce_delay_combo_changed)
+
+        debounce_box.addWidget(self.combo_debounce_delay)
+        card_layout.addLayout(debounce_box)
+
+        card_layout.addWidget(QFrame())
+
         # ALPR Switch Box
         alpr_box = QHBoxLayout()
         alpr_info = QVBoxLayout()
@@ -743,8 +994,8 @@ class ParkingAppUI(QMainWindow):
 
         self.btn_alpr = QPushButton("📷 ALPR: TẮT")
         self.btn_alpr.setCheckable(True)
-        self.btn_alpr.setObjectName("SecondaryBtn")
         self.btn_alpr.toggled.connect(self.toggle_alpr)
+        self.toggle_alpr(False)
 
         alpr_box.addLayout(alpr_info)
         alpr_box.addWidget(self.btn_alpr)
@@ -769,6 +1020,34 @@ class ParkingAppUI(QMainWindow):
         theme_box.addLayout(theme_info)
         theme_box.addWidget(btn_theme_switch)
         card_layout.addLayout(theme_box)
+
+        card_layout.addWidget(QFrame())
+
+        # Guidance Box Target Screen Setting Row (Styled identically to setting rows above)
+        screen_box = QHBoxLayout()
+        screen_info = QVBoxLayout()
+        screen_title = QLabel("🖥️ Màn Hình Hiển Thị Box Hướng Dẫn Xe Vào Ô Đỗ")
+        screen_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        self.lbl_screen_status = QLabel("Chọn màn hình kết nối sẽ xuất hiện cửa sổ Hướng Dẫn Xe Vào Ô Đỗ khi bấm Check-In.")
+        self.lbl_screen_status.setObjectName("SubHeaderLabel")
+
+        screen_info.addWidget(screen_title)
+        screen_info.addWidget(self.lbl_screen_status)
+
+        screen_box.addLayout(screen_info)
+        screen_box.addStretch()
+
+        self.combo_guidance_screen = QComboBox()
+        self.combo_guidance_screen.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.combo_guidance_screen.setMinimumWidth(260)
+        self.combo_guidance_screen.currentIndexChanged.connect(self.on_screen_selection_changed)
+
+        screen_box.addWidget(self.combo_guidance_screen)
+        card_layout.addLayout(screen_box)
+
+        # Populate screen dropdown options
+        self.refresh_guidance_screen_combo()
 
         card_layout.addWidget(QFrame())
 
@@ -797,6 +1076,104 @@ class ParkingAppUI(QMainWindow):
 
     # ================= LOGIC & THEME MANAGEMENT =================
 
+    # ================= CONFIG & SCREEN MANAGEMENT =================
+
+    def load_app_config(self):
+        new_config_path = os.path.join("config", "app_config.json")
+        old_config_path = os.path.join("presets", "app_config.json")
+
+        if not os.path.exists(new_config_path) and os.path.exists(old_config_path):
+            try:
+                os.makedirs("config", exist_ok=True)
+                shutil.move(old_config_path, new_config_path)
+            except Exception as e:
+                print("Error migrating app config:", e)
+
+        config_path = new_config_path if os.path.exists(new_config_path) else old_config_path
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.selected_guidance_screens = data.get("selected_guidance_screens", [0])
+                    self.show_video_embedded = data.get("show_video_embedded", True)
+                    self.show_slot_numbers = data.get("show_slot_numbers", True)
+                    self.show_vehicle_bbox = data.get("show_vehicle_bbox", True)
+                    self.show_vehicle_center = data.get("show_vehicle_center", True)
+                    self.misparked_enabled = data.get("misparked_enabled", True)
+                    self.misparked_delay_sec = data.get("misparked_delay_sec", 10)
+                    self.show_stationary_timer = data.get("show_stationary_timer", True)
+                    self.debounce_delay_sec = float(data.get("debounce_delay_sec", 0.5))
+        except Exception as e:
+            print("Error loading app config:", e)
+
+    def save_app_config(self):
+        if not os.path.exists("config"):
+            os.makedirs("config", exist_ok=True)
+        config_path = os.path.join("config", "app_config.json")
+        try:
+            data = {
+                "selected_guidance_screens": self.selected_guidance_screens,
+                "show_video_embedded": self.show_video_embedded,
+                "show_slot_numbers": self.show_slot_numbers,
+                "show_vehicle_bbox": self.show_vehicle_bbox,
+                "show_vehicle_center": self.show_vehicle_center,
+                "misparked_enabled": self.misparked_enabled,
+                "misparked_delay_sec": self.misparked_delay_sec,
+                "show_stationary_timer": self.show_stationary_timer,
+                "debounce_delay_sec": self.debounce_delay_sec
+            }
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print("Error saving app config:", e)
+
+    def _on_screens_changed(self, screen=None):
+        self.refresh_guidance_screen_combo()
+
+    def refresh_guidance_screen_combo(self):
+        if not hasattr(self, 'combo_guidance_screen'):
+            return
+
+        self.combo_guidance_screen.blockSignals(True)
+        self.combo_guidance_screen.clear()
+
+        screens = QApplication.screens()
+        primary_screen = QApplication.primaryScreen()
+
+        for idx, scr in enumerate(screens):
+            geo = scr.geometry()
+            is_primary = (scr == primary_screen)
+            text = f"Màn hình {idx + 1}: {geo.width()}x{geo.height()} px"
+            if is_primary:
+                text += " (Chính)"
+            self.combo_guidance_screen.addItem(text, userData=[idx])
+
+        if len(screens) > 1:
+            self.combo_guidance_screen.addItem("🖥️ Tất cả các màn hình", userData=list(range(len(screens))))
+
+        # Select target index based on saved config
+        selected_index = 0
+        if hasattr(self, 'selected_guidance_screens'):
+            if len(screens) > 1 and len(self.selected_guidance_screens) == len(screens):
+                selected_index = self.combo_guidance_screen.count() - 1
+            elif self.selected_guidance_screens:
+                first_idx = self.selected_guidance_screens[0]
+                if 0 <= first_idx < len(screens):
+                    selected_index = first_idx
+
+        self.combo_guidance_screen.setCurrentIndex(selected_index)
+        self.combo_guidance_screen.blockSignals(False)
+
+    def on_screen_selection_changed(self, index):
+        if index < 0 or not hasattr(self, 'combo_guidance_screen'):
+            return
+        user_data = self.combo_guidance_screen.itemData(index)
+        if isinstance(user_data, list):
+            self.selected_guidance_screens = user_data
+        else:
+            self.selected_guidance_screens = [index]
+        self.save_app_config()
+
     def on_toggle_display_mode(self, checked):
         self.show_video_embedded = checked
         if hasattr(self, 'lbl_mode_status'):
@@ -809,6 +1186,7 @@ class ParkingAppUI(QMainWindow):
 
         if not checked and self.detection_active and hasattr(self, 'lbl_video_display'):
             self.lbl_video_display.setText("🪟 Luồng Video đang hiển thị tại Cửa sổ Pop-up riêng biệt (OpenCV)...")
+        self.save_app_config()
 
     def on_toggle_slot_numbers(self, checked):
         self.show_slot_numbers = checked
@@ -817,6 +1195,7 @@ class ParkingAppUI(QMainWindow):
                 self.lbl_slot_num_status.setText("Hiển thị số thứ tự ô đỗ (1, 2, 3...) khi nhận diện")
             else:
                 self.lbl_slot_num_status.setText("Ẩn số thứ tự ô đỗ trên khung nhận diện")
+        self.save_app_config()
 
     def on_toggle_vehicle_bbox(self, checked):
         self.show_vehicle_bbox = checked
@@ -825,6 +1204,7 @@ class ParkingAppUI(QMainWindow):
                 self.lbl_bbox_status.setText("Hiển thị khung bao xung quanh phương tiện")
             else:
                 self.lbl_bbox_status.setText("Ẩn khung bao xung quanh phương tiện")
+        self.save_app_config()
 
     def on_toggle_vehicle_center(self, checked):
         self.show_vehicle_center = checked
@@ -833,6 +1213,43 @@ class ParkingAppUI(QMainWindow):
                 self.lbl_center_status.setText("Hiển thị dấu chấm tâm của phương tiện")
             else:
                 self.lbl_center_status.setText("Ẩn dấu chấm tâm của phương tiện")
+        self.save_app_config()
+
+    def on_toggle_misparked(self, checked):
+        self.misparked_enabled = checked
+        if hasattr(self, 'lbl_misparked_status'):
+            if checked:
+                self.lbl_misparked_status.setText(f"Phát cảnh báo và lưu báo cáo khi xe đứng im khoảng {self.misparked_delay_sec}s lấn vào ô đỗ")
+            else:
+                self.lbl_misparked_status.setText("Đã tắt cảnh báo đỗ sai vị trí")
+        self.save_app_config()
+
+    def on_misparked_delay_combo_changed(self, index):
+        if not hasattr(self, 'combo_misparked_delay'):
+            return
+        sec = self.combo_misparked_delay.itemData(index)
+        if sec is not None:
+            self.misparked_delay_sec = int(sec)
+            if hasattr(self, 'lbl_misparked_status') and self.misparked_enabled:
+                self.lbl_misparked_status.setText(f"Phát cảnh báo và lưu báo cáo khi xe đứng im khoảng {self.misparked_delay_sec}s lấn vào ô đỗ")
+            self.save_app_config()
+
+    def on_toggle_stationary_timer(self, checked):
+        self.show_stationary_timer = checked
+        if hasattr(self, 'lbl_timer_badge_status'):
+            if checked:
+                self.lbl_timer_badge_status.setText("Hiển thị thẻ màu vàng đếm ngược giây đang dừng (Xs/10s) trên luồng camera")
+            else:
+                self.lbl_timer_badge_status.setText("Ẩn thẻ đếm giây vàng (chỉ hiển thị nhãn đỏ khi vi phạm)")
+        self.save_app_config()
+
+    def on_debounce_delay_combo_changed(self, index):
+        if not hasattr(self, 'combo_debounce_delay'):
+            return
+        sec = self.combo_debounce_delay.itemData(index)
+        if sec is not None:
+            self.debounce_delay_sec = float(sec)
+            self.save_app_config()
 
     def _update_embedded_video(self, qimg):
         if not qimg.isNull() and hasattr(self, 'lbl_video_display'):
@@ -884,27 +1301,162 @@ class ParkingAppUI(QMainWindow):
             self.switch_settings_view.update()
         if hasattr(self, 'sidebar_frame'):
             self.sidebar_frame.set_handle_theme(self.is_dark_mode)
+        if hasattr(self, 'btn_alpr'):
+            self.toggle_alpr(self.btn_alpr.isChecked())
 
     def toggle_alpr(self, checked):
         self.alpr_enabled = checked
         if checked:
             self.btn_alpr.setText("📷 ALPR: BẬT")
-            self.btn_alpr.setObjectName("SuccessBtn")
+            self.btn_alpr.setStyleSheet("""
+                QPushButton {
+                    background-color: #10B981;
+                    color: #FFFFFF;
+                    border: 1px solid #059669;
+                    border-radius: 8px;
+                    padding: 8px 16px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #059669;
+                    color: #FFFFFF;
+                }
+            """)
         else:
             self.btn_alpr.setText("📷 ALPR: TẮT")
-            self.btn_alpr.setObjectName("SecondaryBtn")
-        self._repolish(self.btn_alpr)
+            if getattr(self, 'is_dark_mode', False):
+                self.btn_alpr.setStyleSheet("""
+                    QPushButton {
+                        background-color: #282B3D;
+                        color: #CBD5E1;
+                        border: 1px solid #33374D;
+                        border-radius: 8px;
+                        padding: 8px 16px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #33374D;
+                        color: #F1F5F9;
+                    }
+                """)
+            else:
+                self.btn_alpr.setStyleSheet("""
+                    QPushButton {
+                        background-color: #F1F5F9;
+                        color: #334155;
+                        border: 1px solid #CBD5E1;
+                        border-radius: 8px;
+                        padding: 8px 16px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #E2E8F0;
+                        color: #0F172A;
+                    }
+                """)
+
+    # ================= VIDEO TIMELINE RANGE SLIDER LOGIC =================
+
+    def _format_sec_to_mmss(self, seconds):
+        s = max(0, int(seconds))
+        m = s // 60
+        sec = s % 60
+        return f"{m:02d}:{sec:02d}"
+
+    def _probe_video_duration(self, file_path):
+        try:
+            import cv2
+            cap = cv2.VideoCapture(file_path)
+            if cap.isOpened():
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                cap.release()
+                if fps > 0 and total_frames > 0:
+                    return int(total_frames / fps)
+        except Exception:
+            pass
+        return 0
+
+    def _on_range_slider_changed(self, low, high):
+        self.entry_start.blockSignals(True)
+        self.entry_end.blockSignals(True)
+
+        self.entry_start.setText(str(low))
+        max_val = self.range_slider.maximum() if hasattr(self, 'range_slider') else 0
+        if high == max_val and max_val > 0:
+            self.entry_end.setText("0")
+        else:
+            self.entry_end.setText(str(high))
+
+        self.entry_start.blockSignals(False)
+        self.entry_end.blockSignals(False)
+        self._update_time_badge_labels(low, high)
+
+    def _on_entry_start_changed(self, text):
+        if not hasattr(self, 'range_slider'):
+            return
+        try:
+            val = int(float(text)) if text.strip() else 0
+            self.range_slider.setLowValue(val)
+        except ValueError:
+            pass
+
+    def _on_entry_end_changed(self, text):
+        if not hasattr(self, 'range_slider'):
+            return
+        try:
+            val = int(float(text)) if text.strip() else 0
+            if val == 0:
+                val = self.range_slider.maximum()
+            self.range_slider.setHighValue(val)
+        except ValueError:
+            pass
+
+    def _update_time_badge_labels(self, low, high):
+        if not hasattr(self, 'lbl_start_fmt'):
+            return
+        self.lbl_start_fmt.setText(f"({self._format_sec_to_mmss(low)})")
+        
+        max_val = self.range_slider.maximum() if hasattr(self, 'range_slider') else 0
+        if high == max_val or high == 0:
+            self.lbl_end_fmt.setText(f"({self._format_sec_to_mmss(max_val)} - Hết)")
+        else:
+            self.lbl_end_fmt.setText(f"({self._format_sec_to_mmss(high)})")
+
+        span = max(0, (max_val if high == 0 else high) - low)
+        if low == 0 and (high == max_val or high == 0):
+            self.lbl_range_span.setText("🎯 Chạy toàn bộ video")
+        else:
+            self.lbl_range_span.setText(f"🎯 Khoảng: {self._format_sec_to_mmss(span)} ({span}s)")
 
     def browse_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Chọn Video", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
         if file_path:
             self.video_path = file_path
             self.entry_video.setText(file_path)
-            self.entry_start.setText("0")
-            self.entry_end.setText("0")
             self.is_webcam = False
             self.btn_webcam.setText("📷 Sử Dụng Camera")
             self.polygons = []
+
+            # Probe video duration using OpenCV
+            duration_sec = self._probe_video_duration(file_path)
+            if hasattr(self, 'range_slider'):
+                self.range_slider.setEnabled(True)
+                if duration_sec > 0:
+                    self.range_slider.setRange(0, duration_sec)
+                    self.range_slider.setValues(0, duration_sec)
+                    self.entry_start.setText("0")
+                    self.entry_end.setText("0")
+                    self.lbl_time_duration.setText(f"⏳ Tổng: {self._format_sec_to_mmss(duration_sec)} ({duration_sec}s)")
+                else:
+                    self.range_slider.setRange(0, 300)
+                    self.range_slider.setValues(0, 300)
+                    self.entry_start.setText("0")
+                    self.entry_end.setText("0")
+                    self.lbl_time_duration.setText("⏳ Tổng: Không xác định")
+            else:
+                self.entry_start.setText("0")
+                self.entry_end.setText("0")
 
     def browse_preset_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -947,6 +1499,10 @@ class ParkingAppUI(QMainWindow):
 
     def choose_webcam(self):
         choose_webcam_dialog(self)
+        if hasattr(self, 'range_slider'):
+            self.range_slider.setEnabled(False)
+        if hasattr(self, 'lbl_time_duration'):
+            self.lbl_time_duration.setText("⏳ Trực tiếp (Camera Live)")
 
     def refresh_preset_list(self):
         self.list_presets.clear()
@@ -1061,7 +1617,7 @@ class ParkingAppUI(QMainWindow):
             return
 
         slot_id = empty_slots[0]
-        show_checkin_guidance_dialog(self, slot_id)
+        show_checkin_guidance_dialog(self, slot_id, self.selected_guidance_screens)
         self._refresh_checkin_page()
 
     # ================= PAGE REFRESHERS =================
@@ -1161,7 +1717,8 @@ class ParkingAppUI(QMainWindow):
             stats = self.db.get_today_stats()
             self.lbl_in.setText(f"🚗 Lượt vào: {stats['total_in']}")
             self.lbl_out.setText(f"🚙 Lượt ra: {stats['total_out']}")
-            self.lbl_occ.setText(f"🅿️ Đang đỗ: {stats['currently_occupied']}")
+            active_misparked = getattr(self, 'current_misparked_count', 0)
+            self.lbl_misparked.setText(f"⚠️ Đỗ sai: {active_misparked}")
 
             def centered_item(text):
                 item = QTableWidgetItem(text)
@@ -1209,6 +1766,31 @@ class ParkingAppUI(QMainWindow):
                 font.setBold(True)
                 item_event.setFont(font)
                 self.table_hist.setItem(r, 4, item_event)
+
+            misparked_list = self.db.get_misparked_history(15)
+            self.table_misparked.setRowCount(len(misparked_list))
+            self.table_misparked.setColumnCount(4)
+            self.table_misparked.setHorizontalHeaderLabels(["Thời gian", "Ô đỗ", "Mã xe", "Trạng thái"])
+            if self.table_misparked.horizontalHeader() is not None:
+                self.table_misparked.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)  # type: ignore
+
+            for r, ev in enumerate(misparked_list):
+                try:
+                    dt = datetime.strptime(ev["timestamp"], "%Y-%m-%d %H:%M:%S")
+                    time_str = dt.strftime("%H:%M:%S")
+                except Exception:
+                    time_str = ev["timestamp"]
+
+                self.table_misparked.setItem(r, 0, centered_item(time_str))
+                self.table_misparked.setItem(r, 1, centered_item(f"Ô {ev['slot_id']}"))
+                self.table_misparked.setItem(r, 2, centered_item(ev["vehicle_id"] or ""))
+
+                item_mp = centered_item("ĐỖ SAI VỊ TRÍ")
+                item_mp.setForeground(QColor("#E11D48"))
+                font_mp = item_mp.font()
+                font_mp.setBold(True)
+                item_mp.setFont(font_mp)
+                self.table_misparked.setItem(r, 3, item_mp)
 
             plates = self.db.get_license_plates(10)
             self.table_plates.setRowCount(len(plates))

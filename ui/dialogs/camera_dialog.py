@@ -21,14 +21,18 @@ def choose_webcam_dialog(parent_ui):
         graph = FilterGraph()
         devices = graph.get_input_devices()
         for idx, name in enumerate(devices):
-            cap = cv2.VideoCapture(idx)
+            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(idx)
             if cap.isOpened():
                 available_cameras.append((idx, name))
                 cap.release()
     except Exception as e:
         print("Pygrabber camera list error:", e)
         for i in range(5):
-            cap = cv2.VideoCapture(i)
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(i)
             if cap.isOpened():
                 available_cameras.append((i, f"Camera {i}"))
                 cap.release()
