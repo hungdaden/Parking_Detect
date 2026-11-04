@@ -23,7 +23,8 @@ from ui.dialogs import (
     choose_webcam_dialog,
     show_checkin_guidance_dialog,
     execute_draw_window,
-    show_export_dialog
+    show_export_dialog,
+    VideoPopupWindow
 )
 
 
@@ -51,6 +52,7 @@ class ParkingAppUI(QMainWindow):
         self.misparked_delay_sec = 10    # Default: 10 seconds stationary delay
         self.show_stationary_timer = True # Default: Show yellow live timer badge
         self.debounce_delay_sec = 0.5    # Default: 0.5 seconds anti-flicker debounce
+        self.popup_video_window = None
 
         self.last_poly_status = []
         self.prev_poly_status = []
@@ -58,7 +60,8 @@ class ParkingAppUI(QMainWindow):
         self.last_frame = None
 
         self.alpr_enabled = False
-        self.is_dark_mode = False
+        self.is_dark_mode = True
+        self._has_centered = False
         self.alpr_reader = None
 
         self.selected_guidance_screens = [0]
@@ -82,9 +85,26 @@ class ParkingAppUI(QMainWindow):
 
     def preload_alpr(self):
         def _preload():
+            # 1. Preload YOLO Model vào RAM
+            try:
+                import sys
+                from ultralytics import YOLO
+                coreml_path = resource_path('yolov8m.mlpackage')
+                pt_path = resource_path('yolov8m.pt')
+                if sys.platform == 'darwin' and os.path.exists(coreml_path):
+                    self.yolo_model = YOLO(coreml_path, task='detect')
+                else:
+                    self.yolo_model = YOLO(pt_path)
+                print("[App] YOLO Model preloaded in background successfully.")
+            except Exception as e:
+                print("[App] YOLO preload error:", e)
+
+            # 2. Preload EasyOCR ALPR
             try:
                 import easyocr
-                self.alpr_reader = easyocr.Reader(['en'], gpu=True)
+                import torch
+                use_gpu = torch.cuda.is_available()
+                self.alpr_reader = easyocr.Reader(['en'], gpu=use_gpu)
                 print("ALPR Model preloaded in background successfully.")
             except Exception as e:
                 print("Failed to preload ALPR model:", e)
@@ -94,7 +114,8 @@ class ParkingAppUI(QMainWindow):
     def init_ui(self):
         self.setWindowIcon(QIcon(resource_path("icon.ico")))
         self.setWindowTitle("Parking Vehicle Detection")
-        self.resize(700, 450)
+        self.resize(1000, 730)
+        self.center_on_screen()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -157,7 +178,7 @@ class ParkingAppUI(QMainWindow):
         sidebar_layout.addStretch()
 
         # Footer Sidebar (Theme toggle & status)
-        self.toggle_theme_btn = QPushButton("🌙  Chế độ Tối")
+        self.toggle_theme_btn = QPushButton("🌞  Chế độ Sáng" if self.is_dark_mode else "🌙  Chế độ Tối")
         self.toggle_theme_btn.setObjectName("NavBtn")
         self.toggle_theme_btn.setToolTip("Chuyển đổi Chế độ Sáng / Tối")
         self.toggle_theme_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1008,17 +1029,36 @@ class ParkingAppUI(QMainWindow):
         theme_info = QVBoxLayout()
         theme_title = QLabel("🎨 Chế Độ Giao Diện (Theme Style)")
         theme_title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        theme_desc = QLabel("Chuyển đổi giữa Chế độ Sáng (Light) và Chế độ Tối (Dark).")
-        theme_desc.setObjectName("SubHeaderLabel")
+        self.lbl_theme_status = QLabel("Chế độ Tối (Dark Mode) - Mặc định" if self.is_dark_mode else "Chế độ Sáng (Light Mode)")
+        self.lbl_theme_status.setObjectName("SubHeaderLabel")
         theme_info.addWidget(theme_title)
-        theme_info.addWidget(theme_desc)
-
-        btn_theme_switch = QPushButton("🌓 Đổi Giao Diện")
-        btn_theme_switch.setObjectName("SecondaryBtn")
-        btn_theme_switch.clicked.connect(self.toggle_theme)
+        theme_info.addWidget(self.lbl_theme_status)
 
         theme_box.addLayout(theme_info)
-        theme_box.addWidget(btn_theme_switch)
+        theme_box.addStretch()
+
+        self.switch_theme = ToggleSwitch()
+        self.switch_theme.setChecked(self.is_dark_mode)
+        self.switch_theme.toggled.connect(self.on_toggle_theme)
+
+        sw_theme_left = QLabel("Sáng")
+        sw_theme_left.setObjectName("SubHeaderLabel")
+        sw_theme_left.setFixedWidth(60)
+        sw_theme_left.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        sw_theme_right = QLabel("Tối")
+        theme_active_color = "#8B5CF6" if self.is_dark_mode else "#7B68EE"
+        sw_theme_right.setStyleSheet(f"font-weight: bold; color: {theme_active_color};")
+        sw_theme_right.setFixedWidth(60)
+        sw_theme_right.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_theme_right = sw_theme_right
+
+        sw_theme_layout = QHBoxLayout()
+        sw_theme_layout.addWidget(sw_theme_left)
+        sw_theme_layout.addWidget(self.switch_theme)
+        sw_theme_layout.addWidget(sw_theme_right)
+
+        theme_box.addLayout(sw_theme_layout)
         card_layout.addLayout(theme_box)
 
         card_layout.addWidget(QFrame())
@@ -1094,6 +1134,7 @@ class ParkingAppUI(QMainWindow):
             if os.path.exists(config_path):
                 with open(config_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                    self.is_dark_mode = data.get("is_dark_mode", True)
                     self.selected_guidance_screens = data.get("selected_guidance_screens", [0])
                     self.show_video_embedded = data.get("show_video_embedded", True)
                     self.show_slot_numbers = data.get("show_slot_numbers", True)
@@ -1112,6 +1153,7 @@ class ParkingAppUI(QMainWindow):
         config_path = os.path.join("config", "app_config.json")
         try:
             data = {
+                "is_dark_mode": self.is_dark_mode,
                 "selected_guidance_screens": self.selected_guidance_screens,
                 "show_video_embedded": self.show_video_embedded,
                 "show_slot_numbers": self.show_slot_numbers,
@@ -1180,12 +1222,23 @@ class ParkingAppUI(QMainWindow):
             if checked:
                 self.lbl_mode_status.setText("Trực tiếp trong App (Embedded Mode)")
             else:
-                self.lbl_mode_status.setText("Mở cửa sổ Pop-up riêng (OpenCV Separate Window)")
+                self.lbl_mode_status.setText("Mở cửa sổ Pop-up riêng (Cửa sổ độc lập)")
         if hasattr(self, 'lbl_video_mode_tag'):
             self.lbl_video_mode_tag.setText("[ Embedded Mode ]" if checked else "[ Separate Window ]")
 
-        if not checked and self.detection_active and hasattr(self, 'lbl_video_display'):
-            self.lbl_video_display.setText("🪟 Luồng Video đang hiển thị tại Cửa sổ Pop-up riêng biệt (OpenCV)...")
+        if checked:
+            # Ẩn cửa sổ Pop-up nếu đang mở
+            if hasattr(self, 'popup_video_window') and self.popup_video_window and self.popup_video_window.isVisible():
+                self.popup_video_window.hide()
+        else:
+            # Nếu đang chạy nhận diện, hiển thị Pop-up ngay lập tức
+            if self.detection_active:
+                if not hasattr(self, 'popup_video_window') or not self.popup_video_window:
+                    self.popup_video_window = VideoPopupWindow(self)
+                if not self.popup_video_window.isVisible():
+                    self.popup_video_window.show()
+                if hasattr(self, 'lbl_video_display'):
+                    self.lbl_video_display.setText("🪟 Luồng Video đang hiển thị tại Cửa sổ Pop-up riêng biệt.\n(Đóng cửa sổ Pop-up để quay lại xem trong App)")
         self.save_app_config()
 
     def on_toggle_slot_numbers(self, checked):
@@ -1252,15 +1305,32 @@ class ParkingAppUI(QMainWindow):
             self.save_app_config()
 
     def _update_embedded_video(self, qimg):
-        if not qimg.isNull() and hasattr(self, 'lbl_video_display'):
-            target_size = self.lbl_video_display.size()
-            pixmap = QPixmap.fromImage(qimg)
-            scaled_pixmap = pixmap.scaled(
-                target_size,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.lbl_video_display.setPixmap(scaled_pixmap)
+        if qimg.isNull():
+            return
+
+        if self.show_video_embedded:
+            # Ẩn popup nếu còn mở
+            if hasattr(self, 'popup_video_window') and self.popup_video_window and self.popup_video_window.isVisible():
+                self.popup_video_window.hide()
+
+            if hasattr(self, 'lbl_video_display'):
+                target_size = self.lbl_video_display.size()
+                if target_size.width() <= 10 or target_size.height() <= 10:
+                    target_size = self.lbl_video_display.minimumSize()
+                pixmap = QPixmap.fromImage(qimg)
+                scaled_pixmap = pixmap.scaled(
+                    target_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self.lbl_video_display.setPixmap(scaled_pixmap)
+        else:
+            # Chế độ Cửa sổ Pop-up độc lập
+            if not hasattr(self, 'popup_video_window') or not self.popup_video_window:
+                self.popup_video_window = VideoPopupWindow(self)
+            if not self.popup_video_window.isVisible():
+                self.popup_video_window.show()
+            self.popup_video_window.update_frame(qimg)
 
     def fade_in(self, widget):
         effect = QGraphicsOpacityEffect(widget)
@@ -1273,13 +1343,45 @@ class ParkingAppUI(QMainWindow):
         anim.start()
         widget.anim = anim
 
+    def on_toggle_theme(self, checked):
+        self.set_dark_mode(checked)
+
     def toggle_theme(self):
-        self.is_dark_mode = not self.is_dark_mode
+        self.set_dark_mode(not self.is_dark_mode)
+
+    def set_dark_mode(self, is_dark):
+        self.is_dark_mode = is_dark
+        self.save_app_config()
         self.apply_theme()
-        if self.is_dark_mode:
-            self.toggle_theme_btn.setText("🌞  Chế độ Sáng")
-        else:
-            self.toggle_theme_btn.setText("🌙  Chế độ Tối")
+        if hasattr(self, 'toggle_theme_btn'):
+            self.toggle_theme_btn.setText("🌞  Chế độ Sáng" if self.is_dark_mode else "🌙  Chế độ Tối")
+        if hasattr(self, 'switch_theme') and self.switch_theme.isChecked() != self.is_dark_mode:
+            self.switch_theme.blockSignals(True)
+            self.switch_theme.setChecked(self.is_dark_mode)
+            self.switch_theme.blockSignals(False)
+        if hasattr(self, 'lbl_theme_status'):
+            self.lbl_theme_status.setText("Chế độ Tối (Dark Mode) - Mặc định" if self.is_dark_mode else "Chế độ Sáng (Light Mode)")
+        if hasattr(self, 'lbl_theme_right'):
+            theme_active_color = "#8B5CF6" if self.is_dark_mode else "#7B68EE"
+            self.lbl_theme_right.setStyleSheet(f"font-weight: bold; color: {theme_active_color};")
+
+    def center_on_screen(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen:
+            screen_geo = screen.availableGeometry()
+            w = min(self.width(), int(screen_geo.width() * 0.95))
+            h = min(self.height(), int(screen_geo.height() * 0.95))
+            if w != self.width() or h != self.height():
+                self.resize(w, h)
+            geo = self.frameGeometry()
+            geo.moveCenter(screen_geo.center())
+            self.move(geo.topLeft())
+
+    def showEvent(self, a0):
+        super().showEvent(a0)
+        if not getattr(self, '_has_centered', False):
+            self.center_on_screen()
+            self._has_centered = True
 
     def resizeEvent(self, a0):
         super().resizeEvent(a0)
@@ -1299,10 +1401,24 @@ class ParkingAppUI(QMainWindow):
 
         if hasattr(self, 'switch_settings_view'):
             self.switch_settings_view.update()
+        if hasattr(self, 'switch_slot_num'):
+            self.switch_slot_num.update()
+        if hasattr(self, 'switch_vehicle_bbox'):
+            self.switch_vehicle_bbox.update()
+        if hasattr(self, 'switch_vehicle_center'):
+            self.switch_vehicle_center.update()
+        if hasattr(self, 'switch_misparked'):
+            self.switch_misparked.update()
+        if hasattr(self, 'switch_stationary_timer'):
+            self.switch_stationary_timer.update()
+        if hasattr(self, 'switch_theme'):
+            self.switch_theme.update()
         if hasattr(self, 'sidebar_frame'):
             self.sidebar_frame.set_handle_theme(self.is_dark_mode)
         if hasattr(self, 'btn_alpr'):
             self.toggle_alpr(self.btn_alpr.isChecked())
+        if hasattr(self, 'toggle_theme_btn'):
+            self.toggle_theme_btn.setText("🌞  Chế độ Sáng" if self.is_dark_mode else "🌙  Chế độ Tối")
 
     def toggle_alpr(self, checked):
         self.alpr_enabled = checked
@@ -1550,13 +1666,23 @@ class ParkingAppUI(QMainWindow):
             return
 
         if not self.video_path and not self.is_webcam:
-            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn video trước!")
+            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn video trước bằng nút Duyệt File hoặc chọn Camera!")
             return
 
         if not self.polygons:
-            res = QMessageBox.question(self, "Cảnh báo", "Bạn chưa khoanh vùng nhận diện bãi đỗ nào!\nVideo sẽ chạy nhưng không hiện chỗ trống đậu xe. Bạn có muốn tiếp tục chạy luôn không?")
-            if res == QMessageBox.StandardButton.No:
+            reply = QMessageBox.question(
+                self,
+                "Cảnh báo",
+                "Bạn chưa khoanh vùng ô đỗ xe!\n\n"
+                "Ứng dụng sẽ chạy ở chế độ nhận diện phương tiện tổng quát "
+                "(không theo dõi trạng thái từng ô đỗ).\n\n"
+                "Bạn có muốn tiếp tục không?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
                 return
+            print("[App] Chưa khoanh vùng ô đỗ: Ứng dụng sẽ chạy ở chế độ nhận diện phương tiện tổng quát.")
 
         primary = QApplication.primaryScreen()
         if primary is not None:
@@ -1582,6 +1708,8 @@ class ParkingAppUI(QMainWindow):
 
         # Switch to Live Video & Slot Status Page (Page 1)
         self.select_page(1)
+        if hasattr(self, 'lbl_video_display'):
+            self.lbl_video_display.setText("⏳ Đang kết nối camera và nạp mô hình AI CoreML (ANE)...\nVui lòng chờ trong giây lát...")
 
         t = threading.Thread(target=self.worker.run, daemon=True)
         t.start()
@@ -1602,6 +1730,9 @@ class ParkingAppUI(QMainWindow):
 
         if hasattr(self, 'lbl_video_display'):
             self.lbl_video_display.setText("📺 Luồng Video Camera Trực Tiếp\n(Đã dừng nhận diện)")
+
+        if hasattr(self, 'popup_video_window') and self.popup_video_window:
+            self.popup_video_window.lbl_video.setText("🛑 Đã dừng nhận diện\n(Bấm 'Bắt đầu nhận diện' trên app để tiếp tục)")
 
     # ================= CHECK-IN ACTION =================
 

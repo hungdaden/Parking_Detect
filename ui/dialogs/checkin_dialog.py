@@ -6,7 +6,7 @@ from ui.theme import set_titlebar_theme
 from logic.overlay_logic import generate_guidance_map_pixmap
 
 
-def create_single_guidance_dialog(parent_ui, slot_id, target_screen: QScreen | None = None):
+def create_single_guidance_dialog(parent_ui, slot_id, target_screen=None):
     """
     Tạo một cửa sổ Hướng dẫn xe vào ô đỗ kích thước lớn với sơ đồ trực quan.
     """

@@ -1,4 +1,5 @@
 import cv2
+import sys
 import numpy as np
 from PyQt6.QtWidgets import QMessageBox
 from ui.dialogs.preset_dialog import show_save_preset_dialog
@@ -9,8 +10,15 @@ def execute_draw_window(parent_ui):
     Mở cửa sổ OpenCV tương tác để vẽ các vùng đỗ xe (polygons).
     """
     if parent_ui.is_webcam:
-        cap = cv2.VideoCapture(parent_ui.webcam_index, cv2.CAP_DSHOW)
-        if not cap.isOpened():
+        if sys.platform == 'win32':
+            cap = cv2.VideoCapture(parent_ui.webcam_index, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(parent_ui.webcam_index)
+        elif sys.platform == 'darwin':
+            cap = cv2.VideoCapture(parent_ui.webcam_index, cv2.CAP_AVFOUNDATION)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(parent_ui.webcam_index)
+        else:
             cap = cv2.VideoCapture(parent_ui.webcam_index)
     else:
         cap = cv2.VideoCapture(parent_ui.video_path)

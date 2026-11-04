@@ -14,11 +14,21 @@ from PyQt6.QtGui import QImage
 from logic.alpr_utils import preprocess_license_plate
 
 
+def _get_best_device():
+    """Tự động phát hiện thiết bị tốt nhất để chạy model AI."""
+    import torch
+    if torch.cuda.is_available():
+        return "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS  # type: ignore
     except Exception:
-        base_path = os.path.abspath(".")
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
 
 
@@ -76,7 +86,7 @@ class DetectionWorker(QObject):
     frame_signal = pyqtSignal(QImage)
 
     def __init__(self, app_logic, screen_w, screen_h):
-        super().__init__()
+        super().__init__(app_logic)
         self.app = app_logic
         self.screen_w = screen_w
         self.screen_h = screen_h
@@ -162,17 +172,39 @@ class DetectionWorker(QObject):
             print("OCR Error:", e)
 
     def run(self):
-        try:
-            model = YOLO(resource_path('yolov8m.pt'))
-        except Exception as e:
-            self.on_error.emit(f"Gặp sự cố khi khởi tạo model YOLO: {e}")
-            return
+        model = getattr(self.app, 'yolo_model', None)
+        if model is None:
+            try:
+                # Ưu tiên CoreML (.mlpackage) trên macOS để chạy trên Apple Neural Engine (ANE)
+                coreml_path = resource_path('yolov8m.mlpackage')
+                pt_path = resource_path('yolov8m.pt')
+
+                if sys.platform == 'darwin' and os.path.exists(coreml_path):
+                    model = YOLO(coreml_path, task='detect')
+                    print(f"[macOS] Đã nạp model CoreML (ANE): {coreml_path}")
+                else:
+                    device = _get_best_device()
+                    model = YOLO(pt_path)
+                    print(f"[AI] Đã nạp model PyTorch trên thiết bị: {device}")
+                self.app.yolo_model = model
+            except Exception as e:
+                self.on_error.emit(f"Gặp sự cố khi khởi tạo model YOLO: {e}")
+                self.on_finished.emit()
+                return
 
         is_webcam = self.app.is_webcam
 
         if is_webcam:
-            cap = cv2.VideoCapture(self.app.webcam_index, cv2.CAP_DSHOW)
-            if not cap.isOpened():
+            if sys.platform == 'win32':
+                cap = cv2.VideoCapture(self.app.webcam_index, cv2.CAP_DSHOW)
+                if not cap.isOpened():
+                    cap = cv2.VideoCapture(self.app.webcam_index)
+            elif sys.platform == 'darwin':
+                # Trên macOS: Dùng CAP_AVFOUNDATION để nhận diện đúng iPhone Continuity Camera và webcam ngoài
+                cap = cv2.VideoCapture(self.app.webcam_index, cv2.CAP_AVFOUNDATION)
+                if not cap.isOpened():
+                    cap = cv2.VideoCapture(self.app.webcam_index)
+            else:
                 cap = cv2.VideoCapture(self.app.webcam_index)
         else:
             cap = cv2.VideoCapture(self.app.video_path)
@@ -181,6 +213,20 @@ class DetectionWorker(QObject):
             self.on_error.emit(f"Không thể kết nối với Camera số {self.app.webcam_index}." if is_webcam else "Không thể đọc đường dẫn video.")
             self.on_finished.emit()
             return
+
+        if is_webcam:
+            backend_name = cap.getBackendName() if hasattr(cap, 'getBackendName') else "AVFOUNDATION"
+            w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            print(f"[DetectionWorker] Đang kết nối Camera index {self.app.webcam_index} (Backend: {backend_name}, Độ phân giải gốc: {w:.0f}x{h:.0f})...")
+            for attempt in range(40):  # Chờ tối đa ~3-4 giây cho iPhone / webcam
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None and test_frame.size > 0:
+                    mean_br = float(np.mean(test_frame))
+                    if mean_br > 1.5:
+                        print(f"[DetectionWorker] Camera {self.app.webcam_index} đã sẵn sàng sau {attempt + 1} lần thử (kích thước: {test_frame.shape[1]}x{test_frame.shape[0]}, độ sáng: {mean_br:.1f}).")
+                        break
+                time.sleep(0.08)
 
         if not is_webcam:
             try:
@@ -220,7 +266,20 @@ class DetectionWorker(QObject):
 
             ret, frame = cap.read()
             if not ret:
-                break
+                if is_webcam:
+                    # Cho phép thử lại vài frame nếu webcam bị trễ tạm thời
+                    retry_ok = False
+                    for _ in range(10):
+                        time.sleep(0.04)
+                        ret, frame = cap.read()
+                        if ret and frame is not None and frame.size > 0:
+                            retry_ok = True
+                            break
+                    if not retry_ok:
+                        print(f"[DetectionWorker] Mất kết nối Camera số {self.app.webcam_index}")
+                        break
+                else:
+                    break
 
             self.app.last_raw_frame = frame.copy()
 
@@ -435,7 +494,9 @@ class DetectionWorker(QObject):
                         else:
                             try:
                                 import easyocr  # type: ignore
-                                self.app.alpr_reader = easyocr.Reader(['en'], gpu=True)
+                                import torch
+                                use_gpu = torch.cuda.is_available()
+                                self.app.alpr_reader = easyocr.Reader(['en'], gpu=use_gpu)
                                 self.reader = self.app.alpr_reader
                             except Exception as e:
                                 print("Lỗi khởi tạo ALPR:", e)
@@ -444,55 +505,31 @@ class DetectionWorker(QObject):
                         plate_crop = frame[py:py + box_h, px:px + box_w].copy()
                         self.ocr_future = self.executor.submit(self._process_alpr, plate_crop)
 
-            # Dynamic Display Handling (Embedded vs Popup Window)
-            if self.app.show_video_embedded:
-                if self._cv_window_open:
-                    try:
-                        cv2.destroyWindow("Video Detection")
-                    except Exception:
-                        pass
-                    self._cv_window_open = False
+            # Nếu webcam trả về đen hoàn toàn (do macOS chưa nạp quyền TCC hoặc nắp che), hiển thị nhắc nhở trực tiếp
+            if is_webcam and frame is not None and np.mean(frame) < 1.0:
+                cv2.putText(
+                    frame,
+                    "Camera tra ve man hinh den (Quyen Camera chua kich hoat)",
+                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 165, 255), 2
+                )
+                cv2.putText(
+                    frame,
+                    "Vui long nhan Cmd+Q de THOAT HAN IDE/Terminal roi mo lai!",
+                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2
+                )
 
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                fh, fw, fch = rgb_frame.shape
-                bytes_per_line = fch * fw
-                qimg = QImage(bytes(rgb_frame.data), fw, fh, bytes_per_line, QImage.Format.Format_RGB888)
-                self.frame_signal.emit(qimg.copy())
+            # Chuyển đổi khung hình và phát tín hiệu cho UI (hoàn toàn tương thích đa nền tảng, không deadlock)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            fh, fw, fch = rgb_frame.shape
+            bytes_per_line = fch * fw
+            qimg = QImage(bytes(rgb_frame.data), fw, fh, bytes_per_line, QImage.Format.Format_RGB888)
+            self.frame_signal.emit(qimg.copy())
 
-                elapsed = int((time.time() - start_time_proc) * 1000)
-                wait_time = max(1, delay - elapsed)
-                time.sleep(wait_time / 1000.0)
-            else:
-                if not self._cv_window_open or cv2.getWindowProperty("Video Detection", cv2.WND_PROP_VISIBLE) < 1:
-                    w = int(self.screen_w * 2 / 3)
-                    h = self.screen_h - 100
-                    cv2.namedWindow("Video Detection", cv2.WINDOW_NORMAL)
-                    cv2.resizeWindow("Video Detection", w, h)
-                    cv2.moveWindow("Video Detection", 0, 0)
-                    self._cv_window_open = True
-
-                cv2.putText(frame, "'Q' stop | 'I' Check In", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                cv2.putText(frame, f"Trang thai: {occupied_count}/{len(polygons_copy)} cho", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
-
-                cv2.imshow("Video Detection", frame)
-
-                elapsed = int((time.time() - start_time_proc) * 1000)
-                wait_time = max(1, delay - elapsed)
-
-                key = cv2.waitKey(wait_time) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('i') and is_webcam:
-                    self.show_checkin_signal.emit()
+            elapsed = int((time.time() - start_time_proc) * 1000)
+            wait_time = max(1, delay - elapsed)
+            time.sleep(wait_time / 1000.0)
 
         cap.release()
-        if self._cv_window_open:
-            try:
-                cv2.destroyWindow("Video Detection")
-            except Exception:
-                pass
-            self._cv_window_open = False
-
         self.executor.shutdown(wait=False)
         self.on_finished.emit()
 

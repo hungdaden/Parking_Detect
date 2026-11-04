@@ -11,11 +11,12 @@ from ui.theme import resource_path
 
 def main():
     # Set AppUserModelID for proper Windows taskbar grouping and icon rendering
-    myappid = 'vtio.parkingdetect.app.1'
-    try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-    except Exception:
-        pass
+    if sys.platform == 'win32':
+        try:
+            myappid = 'vtio.parkingdetect.app.1'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
 
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(resource_path("icon.ico")))

@@ -1,9 +1,11 @@
-# Biuld folders
+# Build folders
 build/
 dist/
+*.iconset/
+icon.icns
 
-# PyInstaller spec files
-*.spec
+# PyInstaller spec files (giữ lại parking_detect_mac.spec và main.spec)
+# *.spec
 
 # Python
 __pycache__/
@@ -18,6 +20,7 @@ env/
 # Database and Generated Files
 parking.db
 presets/
+*.mlpackage/
 
 # Logs
 *.log
