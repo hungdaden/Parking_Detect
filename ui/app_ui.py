@@ -439,6 +439,7 @@ class ParkingAppUI(QMainWindow):
         self.list_presets.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list_presets.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list_presets.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self.list_presets.itemDoubleClicked.connect(self.on_preset_double_clicked)
         self.refresh_preset_list()
 
         preset_layout.addWidget(self.list_presets)
@@ -1624,6 +1625,11 @@ class ParkingAppUI(QMainWindow):
         self.list_presets.clear()
         presets = PresetManager.get_preset_list()
         self.list_presets.addItems(presets)
+
+    def on_preset_double_clicked(self, item):
+        if item:
+            self.list_presets.setCurrentItem(item)
+            self.on_load_selected_preset()
 
     def on_load_selected_preset(self):
         item = self.list_presets.currentItem()
